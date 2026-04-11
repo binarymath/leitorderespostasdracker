@@ -306,8 +306,8 @@ const ScannerOverlay = memo(function ScannerOverlay({
     <div className="pointer-events-none absolute inset-0">
       <div className="absolute inset-0 bg-slate-950/35" />
 
-      <div className="absolute inset-0 flex items-center justify-center px-4 py-6">
-        <div className="relative aspect-[210/297] w-[min(88vw,500px)] max-h-[75vh] overflow-hidden rounded-2xl border border-white/35 bg-slate-900/15 shadow-2xl backdrop-blur-[2px]">
+      <div className="absolute inset-0 flex items-center justify-center px-2 py-3 sm:px-4 sm:py-4">
+        <div className="relative aspect-[210/297] w-[min(94vw,680px)] max-h-[84vh] overflow-hidden rounded-2xl border border-white/35 bg-slate-900/15 shadow-2xl backdrop-blur-[2px] sm:w-[min(90vw,620px)]">
           <div className="absolute inset-0 bg-gradient-to-b from-blue-500/10 via-transparent to-blue-500/10" />
 
           <div className="absolute left-[18%] top-[28%] h-[60%] w-[64%] rounded-xl border border-white/45 bg-blue-500/5">
@@ -685,10 +685,10 @@ function ScannerView({ questionCount, onCapture }) {
       {!cameraBlocked ? (
         <>
           <div className="absolute inset-0 bg-slate-950/80" />
-          <div className="absolute inset-0 flex items-center justify-center px-4 py-6">
+          <div className="absolute inset-0 flex items-center justify-center px-2 py-3 sm:px-4 sm:py-4">
             <div
               ref={scanFrameRef}
-              className="relative aspect-[210/297] w-[min(88vw,500px)] max-h-[75vh] overflow-hidden rounded-2xl border border-white/20 bg-slate-900 shadow-2xl"
+              className="relative aspect-[210/297] w-[min(94vw,680px)] max-h-[84vh] overflow-hidden rounded-2xl border border-white/20 bg-slate-900 shadow-2xl sm:w-[min(90vw,620px)]"
             >
               <video
                 ref={videoRef}
