@@ -1,4 +1,12 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, {
+  Suspense,
+  lazy,
+  memo,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import {
   Camera,
   CheckCircle2,
@@ -13,6 +21,9 @@ import {
   Users,
 } from "lucide-react";
 
+const LazyConfigGabaritoView = lazy(() => import("./views/ConfigGabaritoView.jsx"));
+const LazyDashboardView = lazy(() => import("./views/DashboardView.jsx"));
+
 const OPTIONS = ["A", "B", "C", "D", "E"];
 
 const STORAGE_KEYS = {
@@ -20,6 +31,19 @@ const STORAGE_KEYS = {
   studentList: "dracker_student_list",
   officialKey: "dracker_official_key",
   studentsResults: "dracker_students_results",
+};
+
+const BUBBLE_GEOMETRY = {
+  guideX: 0.11,
+  guideY: 0.08,
+  guideW: 0.78,
+  guideH: 0.82,
+  top: 0.31,
+  bottom: 0.93,
+  leftStart: 0.22,
+  rightStart: 0.72,
+  optionSpacing: 0.038,
+  overlayRadius: 6,
 };
 
 function useLocalStorage(key, initialValue) {
@@ -33,13 +57,45 @@ function useLocalStorage(key, initialValue) {
     }
   });
 
+  const writeTimerRef = useRef(null);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    if (writeTimerRef.current) {
+      window.clearTimeout(writeTimerRef.current);
+      writeTimerRef.current = null;
+    }
+
+    writeTimerRef.current = window.setTimeout(() => {
+      try {
+        const write = () => {
+          window.localStorage.setItem(key, JSON.stringify(value));
+        };
+
+        if ("requestIdleCallback" in window) {
+          window.requestIdleCallback(write, { timeout: 300 });
+          return;
+        }
+
+        write();
+      } catch {
+        // noop
+      }
+    }, 80);
+
+    return () => {
+      if (writeTimerRef.current) {
+        window.clearTimeout(writeTimerRef.current);
+        writeTimerRef.current = null;
+      }
+    };
+  }, [key, value]);
+
   const setStoredValue = (nextValue) => {
-    setValue((prev) => {
-      const computed =
-        typeof nextValue === "function" ? nextValue(prev) : nextValue;
-      window.localStorage.setItem(key, JSON.stringify(computed));
-      return computed;
-    });
+    setValue((prev) =>
+      typeof nextValue === "function" ? nextValue(prev) : nextValue,
+    );
   };
 
   return [value, setStoredValue];
@@ -78,300 +134,6 @@ function randomAnswers(total) {
     { length: total },
     () => OPTIONS[Math.floor(Math.random() * OPTIONS.length)],
   );
-}
-
-const A4_WARP_WIDTH = 840;
-const A4_WARP_HEIGHT = 1188;
-
-function ensureOpenCvLoaded() {
-  if (typeof window === "undefined") {
-    return Promise.reject(new Error("window indisponível"));
-  }
-
-  if (window.cv && window.cv.Mat) {
-    return Promise.resolve(window.cv);
-  }
-
-  if (window.__drackerOpenCvPromise) {
-    return window.__drackerOpenCvPromise;
-  }
-
-  window.__drackerOpenCvPromise = new Promise((resolve, reject) => {
-    let script = document.getElementById("opencv-js");
-
-    const resolveWhenReady = () => {
-      if (window.cv && window.cv.Mat) {
-        resolve(window.cv);
-        return;
-      }
-
-      if (!window.cv) {
-        reject(new Error("OpenCV não inicializado"));
-        return;
-      }
-
-      window.cv.onRuntimeInitialized = () => {
-        resolve(window.cv);
-      };
-    };
-
-    if (!script) {
-      script = document.createElement("script");
-      script.id = "opencv-js";
-      script.src = "https://docs.opencv.org/4.x/opencv.js";
-      script.async = true;
-      script.onerror = () => reject(new Error("Falha ao carregar OpenCV.js"));
-      script.onload = resolveWhenReady;
-      document.body.appendChild(script);
-      return;
-    }
-
-    resolveWhenReady();
-  });
-
-  return window.__drackerOpenCvPromise;
-}
-
-function orderAnchorPoints(points) {
-  if (!Array.isArray(points) || points.length !== 4) return null;
-
-  const bySum = [...points].sort((a, b) => a.x + a.y - (b.x + b.y));
-  const byDiff = [...points].sort((a, b) => a.y - a.x - (b.y - b.x));
-
-  const tl = bySum[0];
-  const br = bySum[3];
-  const tr = byDiff[0];
-  const bl = byDiff[3];
-
-  return [tl, tr, br, bl];
-}
-
-function pickCornerAnchors(candidates, width, height) {
-  if (candidates.length < 4) return null;
-
-  const corners = [
-    { x: 0, y: 0 },
-    { x: width, y: 0 },
-    { x: width, y: height },
-    { x: 0, y: height },
-  ];
-
-  const chosen = [];
-  const used = new Set();
-
-  corners.forEach((corner) => {
-    let bestIndex = -1;
-    let bestDistance = Number.POSITIVE_INFINITY;
-
-    candidates.forEach((candidate, index) => {
-      if (used.has(index)) return;
-      const dx = candidate.x - corner.x;
-      const dy = candidate.y - corner.y;
-      const distance = Math.hypot(dx, dy);
-      if (distance < bestDistance) {
-        bestDistance = distance;
-        bestIndex = index;
-      }
-    });
-
-    if (bestIndex >= 0) {
-      used.add(bestIndex);
-      chosen.push(candidates[bestIndex]);
-    }
-  });
-
-  if (chosen.length !== 4) return null;
-  return orderAnchorPoints(chosen);
-}
-
-function detectAnchors(cv, rgbaMat) {
-  const gray = new cv.Mat();
-  const blur = new cv.Mat();
-  const thresholded = new cv.Mat();
-  const contours = new cv.MatVector();
-  const hierarchy = new cv.Mat();
-
-  try {
-    cv.cvtColor(rgbaMat, gray, cv.COLOR_RGBA2GRAY);
-    cv.GaussianBlur(gray, blur, new cv.Size(5, 5), 0, 0, cv.BORDER_DEFAULT);
-    cv.threshold(
-      blur,
-      thresholded,
-      0,
-      255,
-      cv.THRESH_BINARY_INV + cv.THRESH_OTSU,
-    );
-
-    cv.findContours(
-      thresholded,
-      contours,
-      hierarchy,
-      cv.RETR_LIST,
-      cv.CHAIN_APPROX_SIMPLE,
-    );
-
-    const areaFrame = rgbaMat.cols * rgbaMat.rows;
-    const minArea = areaFrame * 0.00008;
-    const maxArea = areaFrame * 0.02;
-
-    const candidates = [];
-    for (let i = 0; i < contours.size(); i += 1) {
-      const contour = contours.get(i);
-      const area = cv.contourArea(contour);
-      const perimeter = cv.arcLength(contour, true);
-
-      if (perimeter <= 0 || area < minArea || area > maxArea) {
-        contour.delete();
-        continue;
-      }
-
-      const circularity = (4 * Math.PI * area) / (perimeter * perimeter);
-      if (circularity < 0.68) {
-        contour.delete();
-        continue;
-      }
-
-      const moments = cv.moments(contour);
-      if (moments.m00 !== 0) {
-        candidates.push({
-          x: moments.m10 / moments.m00,
-          y: moments.m01 / moments.m00,
-          area,
-        });
-      }
-
-      contour.delete();
-    }
-
-    const anchors = pickCornerAnchors(candidates, rgbaMat.cols, rgbaMat.rows);
-    return anchors;
-  } finally {
-    gray.delete();
-    blur.delete();
-    thresholded.delete();
-    contours.delete();
-    hierarchy.delete();
-  }
-}
-
-function warpPaperToA4(cv, srcMat, anchors) {
-  if (!anchors || anchors.length !== 4) return null;
-
-  const srcTri = cv.matFromArray(4, 1, cv.CV_32FC2, [
-    anchors[0].x,
-    anchors[0].y,
-    anchors[1].x,
-    anchors[1].y,
-    anchors[2].x,
-    anchors[2].y,
-    anchors[3].x,
-    anchors[3].y,
-  ]);
-
-  const dstTri = cv.matFromArray(4, 1, cv.CV_32FC2, [
-    0,
-    0,
-    A4_WARP_WIDTH - 1,
-    0,
-    A4_WARP_WIDTH - 1,
-    A4_WARP_HEIGHT - 1,
-    0,
-    A4_WARP_HEIGHT - 1,
-  ]);
-
-  const matrix = cv.getPerspectiveTransform(srcTri, dstTri);
-  const warped = new cv.Mat();
-
-  cv.warpPerspective(
-    srcMat,
-    warped,
-    matrix,
-    new cv.Size(A4_WARP_WIDTH, A4_WARP_HEIGHT),
-    cv.INTER_LINEAR,
-    cv.BORDER_CONSTANT,
-    new cv.Scalar(),
-  );
-
-  srcTri.delete();
-  dstTri.delete();
-  matrix.delete();
-
-  return warped;
-}
-
-function buildBubbleCoordinatesPercent(questionCount) {
-  const top = 0.36;
-  const bottom = 0.88;
-  const leftColumnStart = 0.29;
-  const rightColumnStart = 0.76;
-  const optionSpacing = 0.032;
-  const rows = Math.ceil(questionCount / 2);
-
-  return Array.from({ length: questionCount }, (_, index) => {
-    const col = index % 2;
-    const row = Math.floor(index / 2);
-    const y = rows <= 1 ? top : top + (row * (bottom - top)) / (rows - 1);
-    const xStart = col === 0 ? leftColumnStart : rightColumnStart;
-
-    return OPTIONS.map((option, optIndex) => ({
-      option,
-      xPercent: xStart + optIndex * optionSpacing,
-      yPercent: y,
-    }));
-  });
-}
-
-function readAnswersFromWarped(cv, warpedMat, questionCount) {
-  const gray = new cv.Mat();
-  const binary = new cv.Mat();
-
-  try {
-    cv.cvtColor(warpedMat, gray, cv.COLOR_RGBA2GRAY);
-    cv.threshold(gray, binary, 0, 255, cv.THRESH_BINARY_INV + cv.THRESH_OTSU);
-
-    const layout = buildBubbleCoordinatesPercent(questionCount);
-    const radius = Math.max(6, Math.round(warpedMat.cols * 0.009));
-
-    const answers = layout.map((questionBubbles) => {
-      let best = { option: "A", density: -1 };
-
-      questionBubbles.forEach((bubble) => {
-        const cx = Math.round(bubble.xPercent * warpedMat.cols);
-        const cy = Math.round(bubble.yPercent * warpedMat.rows);
-
-        let dark = 0;
-        let total = 0;
-
-        const yStart = Math.max(0, cy - radius);
-        const yEnd = Math.min(binary.rows - 1, cy + radius);
-        const xStart = Math.max(0, cx - radius);
-        const xEnd = Math.min(binary.cols - 1, cx + radius);
-
-        for (let y = yStart; y <= yEnd; y += 1) {
-          for (let x = xStart; x <= xEnd; x += 1) {
-            const dx = x - cx;
-            const dy = y - cy;
-            if (dx * dx + dy * dy > radius * radius) continue;
-            total += 1;
-            const pixel = binary.ucharPtr(y, x)[0];
-            if (pixel > 0) dark += 1;
-          }
-        }
-
-        const density = total > 0 ? dark / total : 0;
-        if (density > best.density) {
-          best = { option: bubble.option, density };
-        }
-      });
-
-      return best.density >= 0.12 ? best.option : "A";
-    });
-
-    return answers;
-  } finally {
-    gray.delete();
-    binary.delete();
-  }
 }
 
 function Header({ activeView, onNavigate }) {
@@ -422,127 +184,6 @@ function Header({ activeView, onNavigate }) {
         </nav>
       </div>
     </header>
-  );
-}
-
-function ConfigGabaritoView({ examConfig, onSave }) {
-  const [questionCount, setQuestionCount] = useState(examConfig.questionCount || 20);
-  const [answers, setAnswers] = useState(examConfig.answers || Array.from({ length: 20 }, () => "A"));
-  const [status, setStatus] = useState("");
-
-  useEffect(() => {
-    setQuestionCount(examConfig.questionCount || 20);
-    setAnswers(examConfig.answers || Array.from({ length: 20 }, () => "A"));
-  }, [examConfig]);
-
-  const updateCount = (nextValue) => {
-    const nextCount = Math.max(1, Math.min(60, Number(nextValue) || 1));
-    setQuestionCount(nextCount);
-    setAnswers((prev) => {
-      if (prev.length === nextCount) return prev;
-      if (prev.length > nextCount) return prev.slice(0, nextCount);
-      return [...prev, ...Array.from({ length: nextCount - prev.length }, () => "A")];
-    });
-  };
-
-  const saveOfficial = () => {
-    const payload = {
-      questionCount,
-      answers: answers.slice(0, questionCount),
-    };
-    onSave(payload);
-    setStatus("Gabarito oficial salvo com sucesso.");
-  };
-
-  return (
-    <section className="mx-auto w-full max-w-7xl px-4 pb-12 pt-6 sm:px-6">
-      <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
-        <div className="mb-5 flex items-center gap-2">
-          <Settings2 className="h-5 w-5 text-blue-600" />
-          <h2 className="text-base font-semibold text-slate-900">
-            Configuração do Gabarito Oficial
-          </h2>
-        </div>
-
-        <div className="grid gap-4 rounded-xl border border-slate-200 bg-slate-50 p-4 sm:grid-cols-[1fr_auto] sm:items-end">
-          <div>
-            <label className="mb-2 block text-sm font-medium text-slate-700">
-              Número de questões
-            </label>
-            <input
-              type="number"
-              min={1}
-              max={60}
-              value={questionCount}
-              onChange={(event) => updateCount(event.target.value)}
-              className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none ring-blue-600 transition focus:ring"
-            />
-          </div>
-
-          <div className="flex gap-2">
-            {[5, 10, 20].map((preset) => (
-              <button
-                key={preset}
-                type="button"
-                onClick={() => updateCount(preset)}
-                className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-medium text-slate-700 hover:bg-slate-100"
-              >
-                {preset}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        <div className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-          {Array.from({ length: questionCount }, (_, index) => index + 1).map(
-            (qNumber, index) => (
-              <div
-                key={qNumber}
-                className="rounded-xl border border-slate-200 bg-white p-3"
-              >
-                <p className="mb-2 text-sm font-medium text-slate-700">Q{qNumber}</p>
-                <div className="grid grid-cols-5 gap-2">
-                  {OPTIONS.map((option) => {
-                    const active = answers[index] === option;
-                    return (
-                      <button
-                        key={`${qNumber}-${option}`}
-                        type="button"
-                        onClick={() => {
-                          setAnswers((prev) => {
-                            const next = [...prev];
-                            next[index] = option;
-                            return next;
-                          });
-                        }}
-                        className={`rounded-lg border px-2 py-2 text-sm font-semibold transition ${
-                          active
-                            ? "border-blue-600 bg-blue-600 text-white"
-                            : "border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
-                        }`}
-                      >
-                        {option}
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-            ),
-          )}
-        </div>
-
-        <div className="mt-5 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-          <p className="text-sm text-slate-500">{status}</p>
-          <button
-            type="button"
-            onClick={saveOfficial}
-            className="no-print rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-medium text-white transition hover:bg-blue-700"
-          >
-            Salvar Gabarito Oficial
-          </button>
-        </div>
-      </div>
-    </section>
   );
 }
 
@@ -661,24 +302,69 @@ function CustomizePrintView({
   );
 }
 
+const ScannerOverlay = memo(function ScannerOverlay({
+  overlayCanvasRef,
+  processingCanvasRef,
+  anchorFeedback,
+  workerLoadError,
+  workerLoading,
+}) {
+  return (
+    <>
+      <canvas
+        ref={overlayCanvasRef}
+        className="pointer-events-none absolute inset-0 h-full w-full"
+      />
+
+      <canvas ref={processingCanvasRef} className="hidden" />
+
+      <div className="absolute left-1/2 top-4 z-20 -translate-x-1/2">
+        <div
+          className={`rounded-full px-3 py-1 text-xs font-medium shadow-sm ${
+            anchorFeedback.ready
+              ? "bg-emerald-100 text-emerald-700"
+              : "bg-slate-100 text-slate-700"
+          }`}
+        >
+          {anchorFeedback.message}
+        </div>
+      </div>
+
+      {workerLoading && (
+        <div className="absolute left-1/2 top-12 z-20 -translate-x-1/2 rounded-full bg-blue-100 px-3 py-1 text-xs font-medium text-blue-700 shadow-sm">
+          Carregamento otimizado: preparando motor de visão...
+        </div>
+      )}
+
+      {workerLoadError && (
+        <div className="absolute left-1/2 top-20 z-20 -translate-x-1/2 rounded-full bg-amber-100 px-3 py-1 text-xs font-medium text-amber-700 shadow-sm">
+          {workerLoadError}
+        </div>
+      )}
+    </>
+  );
+});
+
 function ScannerView({ questionCount, onCapture }) {
   const videoRef = useRef(null);
   const streamRef = useRef(null);
+  const workerRef = useRef(null);
   const processingCanvasRef = useRef(null);
   const overlayCanvasRef = useRef(null);
+  const pendingFrameRef = useRef(false);
+  const latestAnswersRef = useRef(null);
 
   const [isCameraActive, setIsCameraActive] = useState(false);
   const [cameraReady, setCameraReady] = useState(false);
   const [cameraBlocked, setCameraBlocked] = useState(false);
-  const [cvReady, setCvReady] = useState(false);
-  const [cvLoadError, setCvLoadError] = useState("");
+  const [workerReady, setWorkerReady] = useState(false);
+  const [workerLoading, setWorkerLoading] = useState(true);
+  const [workerLoadError, setWorkerLoadError] = useState("");
   const [anchorFeedback, setAnchorFeedback] = useState({
     ready: false,
     message: "Aguardando câmera...",
     points: [],
   });
-
-  const latestAnchorPointsRef = useRef(null);
 
   const drawOverlayFeedback = (points) => {
     const canvas = overlayCanvasRef.current;
@@ -696,35 +382,34 @@ function ScannerView({ questionCount, onCapture }) {
 
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
-
     ctx.clearRect(0, 0, width, height);
 
-    const guideX = width * 0.11;
-    const guideY = height * 0.08;
-    const guideW = width * 0.78;
-    const guideH = height * 0.82;
+    const guideX = width * BUBBLE_GEOMETRY.guideX;
+    const guideY = height * BUBBLE_GEOMETRY.guideY;
+    const guideW = width * BUBBLE_GEOMETRY.guideW;
+    const guideH = height * BUBBLE_GEOMETRY.guideH;
 
     ctx.lineWidth = 2;
     ctx.strokeStyle = "rgba(255,255,255,0.85)";
     ctx.strokeRect(guideX, guideY, guideW, guideH);
 
     const rows = Math.ceil(questionCount / 2);
-    const top = guideY + guideH * 0.31;
-    const bottom = guideY + guideH * 0.93;
-    const leftBase = guideX + guideW * 0.22;
-    const rightBase = guideX + guideW * 0.72;
+    const top = guideY + guideH * BUBBLE_GEOMETRY.top;
+    const bottom = guideY + guideH * BUBBLE_GEOMETRY.bottom;
+    const leftBase = guideX + guideW * BUBBLE_GEOMETRY.leftStart;
+    const rightBase = guideX + guideW * BUBBLE_GEOMETRY.rightStart;
 
     ctx.strokeStyle = "rgba(255,255,255,0.45)";
     for (let q = 0; q < questionCount; q += 1) {
-      const col = q % 2;
-      const row = Math.floor(q / 2);
+      const col = q < rows ? 0 : 1;
+      const row = col === 0 ? q : q - rows;
       const y = rows <= 1 ? top : top + (row * (bottom - top)) / (rows - 1);
       const xBase = col === 0 ? leftBase : rightBase;
 
       for (let o = 0; o < OPTIONS.length; o += 1) {
-        const x = xBase + o * (guideW * 0.031);
+        const x = xBase + o * (guideW * BUBBLE_GEOMETRY.optionSpacing);
         ctx.beginPath();
-        ctx.arc(x, y, 4, 0, Math.PI * 2);
+        ctx.arc(x, y, BUBBLE_GEOMETRY.overlayRadius, 0, Math.PI * 2);
         ctx.stroke();
       }
     }
@@ -735,7 +420,6 @@ function ScannerView({ questionCount, onCapture }) {
 
       ctx.strokeStyle = "rgba(34,197,94,0.95)";
       ctx.fillStyle = "rgba(34,197,94,0.95)";
-      ctx.lineWidth = 2;
 
       points.forEach((point, idx) => {
         const px = point.x * sx;
@@ -746,130 +430,67 @@ function ScannerView({ questionCount, onCapture }) {
         ctx.font = "12px sans-serif";
         ctx.fillText(String(idx + 1), px + 8, py - 8);
       });
-
-      ctx.beginPath();
-      ctx.moveTo(points[0].x * sx, points[0].y * sy);
-      ctx.lineTo(points[1].x * sx, points[1].y * sy);
-      ctx.lineTo(points[2].x * sx, points[2].y * sy);
-      ctx.lineTo(points[3].x * sx, points[3].y * sy);
-      ctx.closePath();
-      ctx.stroke();
-    }
-  };
-
-  const analyzeCurrentFrame = () => {
-    const cv = window.cv;
-    const video = videoRef.current;
-    const canvas = processingCanvasRef.current;
-    if (!cv || !video || !canvas || !video.videoWidth || !video.videoHeight) {
-      return { ready: false, message: "Vídeo ainda não pronto", points: null };
-    }
-
-    canvas.width = video.videoWidth;
-    canvas.height = video.videoHeight;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) {
-      return { ready: false, message: "Falha no contexto do canvas", points: null };
-    }
-
-    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-    const src = cv.imread(canvas);
-
-    try {
-      const anchors = detectAnchors(cv, src);
-      if (!anchors) {
-        drawOverlayFeedback(null);
-        latestAnchorPointsRef.current = null;
-        return {
-          ready: false,
-          message: "Aponte para o gabarito com 4 âncoras visíveis",
-          points: null,
-        };
-      }
-
-      latestAnchorPointsRef.current = anchors;
-      drawOverlayFeedback(anchors);
-
-      return {
-        ready: true,
-        message: "Âncoras detectadas. Pode capturar.",
-        points: anchors,
-      };
-    } finally {
-      src.delete();
-    }
-  };
-
-  const handleCaptureWithCv = () => {
-    const cv = window.cv;
-    const video = videoRef.current;
-    const canvas = processingCanvasRef.current;
-    if (!cv || !video || !canvas) {
-      onCapture(null);
-      return;
-    }
-
-    canvas.width = video.videoWidth;
-    canvas.height = video.videoHeight;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) {
-      onCapture(null);
-      return;
-    }
-
-    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-    const src = cv.imread(canvas);
-
-    try {
-      const anchors = latestAnchorPointsRef.current || detectAnchors(cv, src);
-      if (!anchors) {
-        setAnchorFeedback({
-          ready: false,
-          message: "Sem âncoras válidas. Ajuste enquadramento.",
-          points: [],
-        });
-        return;
-      }
-
-      const warped = warpPaperToA4(cv, src, anchors);
-      if (!warped) {
-        onCapture(null);
-        return;
-      }
-
-      try {
-        const answers = readAnswersFromWarped(cv, warped, questionCount);
-        onCapture(answers);
-      } finally {
-        warped.delete();
-      }
-    } finally {
-      src.delete();
     }
   };
 
   useEffect(() => {
-    let active = true;
-    ensureOpenCvLoaded()
-      .then(() => {
-        if (!active) return;
-        setCvReady(true);
-        setCvLoadError("");
-      })
-      .catch(() => {
-        if (!active) return;
-        setCvReady(false);
-        setCvLoadError("OpenCV.js ainda está a carregar ou indisponível.");
-      });
+    const worker = new Worker(
+      new URL("./workers/imageProcessor.worker.js", import.meta.url),
+      { type: "classic" },
+    );
+
+    workerRef.current = worker;
+    setWorkerLoading(true);
+
+    worker.onmessage = (event) => {
+      const { type, payload, message } = event.data || {};
+
+      if (type === "opencv-ready") {
+        setWorkerReady(true);
+        setWorkerLoading(false);
+        setWorkerLoadError("");
+        return;
+      }
+
+      if (type === "opencv-error") {
+        setWorkerReady(false);
+        setWorkerLoading(false);
+        setWorkerLoadError(message || "Falha ao carregar OpenCV no worker");
+        return;
+      }
+
+      if (type === "processed") {
+        pendingFrameRef.current = false;
+        drawOverlayFeedback(payload.anchors);
+        latestAnswersRef.current = payload.answers;
+        setAnchorFeedback({
+          ready: payload.ready,
+          message: payload.message,
+          points: payload.anchors || [],
+        });
+        return;
+      }
+
+      if (type === "process-error") {
+        pendingFrameRef.current = false;
+        setAnchorFeedback({
+          ready: false,
+          message: message || "Erro de processamento",
+          points: [],
+        });
+      }
+    };
+
+    worker.postMessage({ type: "init-opencv" });
 
     return () => {
-      active = false;
+      worker.terminate();
+      workerRef.current = null;
     };
   }, []);
 
   useEffect(() => {
     if (!isCameraActive) return undefined;
-
     let cancelled = false;
 
     async function startCamera() {
@@ -914,22 +535,43 @@ function ScannerView({ questionCount, onCapture }) {
         streamRef.current = null;
       }
     };
-  }, [isCameraActive]);
+  }, [isCameraActive, questionCount]);
 
   useEffect(() => {
-    if (!isCameraActive || !cameraReady || !cvReady || cameraBlocked) return undefined;
+    if (!isCameraActive || !cameraReady || !workerReady || cameraBlocked) return undefined;
 
-    const timer = window.setInterval(() => {
-      const result = analyzeCurrentFrame();
-      setAnchorFeedback({
-        ready: result.ready,
-        message: result.message,
-        points: result.points || [],
+    const tick = window.setInterval(() => {
+      if (pendingFrameRef.current || !workerRef.current) return;
+      const video = videoRef.current;
+      const canvas = processingCanvasRef.current;
+      if (!video || !canvas || !video.videoWidth || !video.videoHeight) return;
+
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+
+      const ctx = canvas.getContext("2d", { willReadFrequently: true });
+      if (!ctx) return;
+
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+      const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      pendingFrameRef.current = true;
+      workerRef.current.postMessage({
+        type: "process-frame",
+        payload: { imageData, questionCount },
       });
     }, 220);
 
-    return () => window.clearInterval(timer);
-  }, [isCameraActive, cameraReady, cvReady, cameraBlocked]);
+    return () => window.clearInterval(tick);
+  }, [isCameraActive, cameraReady, workerReady, cameraBlocked, questionCount]);
+
+  const handleCapture = () => {
+    if (workerReady && anchorFeedback.ready && Array.isArray(latestAnswersRef.current)) {
+      onCapture(latestAnswersRef.current);
+      return;
+    }
+
+    onCapture(null);
+  };
 
   if (!isCameraActive) {
     return (
@@ -994,44 +636,27 @@ function ScannerView({ questionCount, onCapture }) {
               Câmera Simulada
             </h2>
             <p className="mt-2 max-w-sm text-sm text-slate-600">
-              O navegador bloqueou a câmera traseira. A simulação continua com
-              o overlay de detecção ativo.
+              O navegador bloqueou a câmera traseira. A leitura continua com
+              fallback.
             </p>
           </div>
         </div>
       )}
 
-      <canvas
-        ref={overlayCanvasRef}
-        className="pointer-events-none absolute inset-0 h-full w-full"
+      <ScannerOverlay
+        overlayCanvasRef={overlayCanvasRef}
+        processingCanvasRef={processingCanvasRef}
+        anchorFeedback={anchorFeedback}
+        workerLoadError={workerLoadError}
+        workerLoading={workerLoading}
       />
-
-      <canvas ref={processingCanvasRef} className="hidden" />
-
-      <div className="absolute left-1/2 top-4 z-20 -translate-x-1/2">
-        <div
-          className={`rounded-full px-3 py-1 text-xs font-medium shadow-sm ${
-            anchorFeedback.ready
-              ? "bg-emerald-100 text-emerald-700"
-              : "bg-slate-100 text-slate-700"
-          }`}
-        >
-          {anchorFeedback.message}
-        </div>
-      </div>
-
-      {cvLoadError && (
-        <div className="absolute left-1/2 top-12 z-20 -translate-x-1/2 rounded-full bg-amber-100 px-3 py-1 text-xs font-medium text-amber-700 shadow-sm">
-          {cvLoadError} Use modo fallback para continuar.
-        </div>
-      )}
 
       <div className="no-print absolute inset-x-0 bottom-0 flex justify-center pb-7 pt-6">
         <div className="flex flex-col items-center gap-2">
           <button
             type="button"
-            onClick={handleCaptureWithCv}
-            disabled={!cvReady || !anchorFeedback.ready}
+            onClick={handleCapture}
+            disabled={!anchorFeedback.ready && workerReady}
             className="group relative inline-flex h-24 w-24 items-center justify-center rounded-full bg-white shadow-xl ring-8 ring-white/20 transition active:scale-95 disabled:cursor-not-allowed disabled:opacity-60"
             aria-label="Capturar gabarito"
           >
@@ -1039,7 +664,7 @@ function ScannerView({ questionCount, onCapture }) {
             <span className="h-5 w-5 rounded-full bg-blue-600 transition group-active:scale-125" />
           </button>
 
-          {!cvReady && (
+          {!workerReady && (
             <button
               type="button"
               onClick={() => onCapture(null)}
@@ -1054,117 +679,16 @@ function ScannerView({ questionCount, onCapture }) {
   );
 }
 
-function DashboardView({ examConfig, results, onExport, onClear }) {
-  const metrics = useMemo(() => {
-    const totalRead = results.length;
-    const average =
-      totalRead > 0
-        ? results.reduce((sum, item) => sum + Number(item.score || 0), 0) / totalRead
-        : 0;
-    return { totalRead, average };
-  }, [results]);
-
-  const questionBars = useMemo(() => {
-    const totalQuestions = examConfig.questionCount;
-    return Array.from({ length: totalQuestions }, (_, idx) => {
-      const hits = results.filter(
-        (item) => item.studentAnswers?.[idx] === examConfig.answers?.[idx],
-      ).length;
-      const accuracy =
-        results.length > 0 ? Math.round((hits / results.length) * 100) : 0;
-      return { label: `Q${idx + 1}`, accuracy };
-    });
-  }, [examConfig, results]);
-
-  const worstQuestion = useMemo(() => {
-    if (!questionBars.length) return null;
-    return questionBars.reduce((lowest, current) =>
-      current.accuracy < lowest.accuracy ? current : lowest,
-    );
-  }, [questionBars]);
-
-  return (
-    <section className="mx-auto w-full max-w-7xl px-4 pb-12 pt-6 sm:px-6">
-      <div className="grid gap-3 sm:grid-cols-2">
-        <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-          <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
-            Média da Turma
-          </p>
-          <p className="mt-2 text-3xl font-bold text-slate-900">
-            {metrics.average.toFixed(1)}
-          </p>
-        </div>
-        <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-          <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
-            Total de Provas Lidas
-          </p>
-          <p className="mt-2 text-3xl font-bold text-slate-900">{metrics.totalRead}</p>
-        </div>
-      </div>
-
-      <div className="mt-3 flex flex-wrap justify-end gap-2">
-        <button
-          type="button"
-          onClick={onExport}
-          className="no-print inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-slate-700 transition hover:bg-slate-50"
-        >
-          <Download className="h-4 w-4" />
-          Baixar Backup (.json)
-        </button>
-        <button
-          type="button"
-          onClick={onClear}
-          className="no-print inline-flex items-center gap-2 rounded-lg bg-rose-600 px-3 py-2 text-xs font-medium text-white transition hover:bg-rose-700"
-        >
-          <Trash2 className="h-4 w-4" />
-          Limpar Turma
-        </button>
-      </div>
-
-      <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-        <h3 className="mb-4 text-sm font-semibold text-slate-900">
-          Taxa de acerto por questão
-        </h3>
-
-        <div className="space-y-2">
-          {questionBars.map((item) => (
-            <div
-              key={item.label}
-              className="grid grid-cols-[44px_1fr_44px] items-center gap-3"
-            >
-              <span className="text-xs font-medium text-slate-500">{item.label}</span>
-              <div className="h-3 rounded-full bg-slate-100">
-                <div
-                  className="h-3 rounded-full bg-blue-600"
-                  style={{ width: `${item.accuracy}%` }}
-                />
-              </div>
-              <span className="text-right text-xs font-semibold text-slate-700">
-                {item.accuracy}%
-              </span>
-            </div>
-          ))}
-        </div>
-      </div>
-
-      {worstQuestion && (
-        <div className="mt-4 rounded-2xl border border-fuchsia-200 bg-fuchsia-50 p-4">
-          <h3 className="text-sm font-semibold text-slate-900">
-            Insight Pedagógico (IA)
-          </h3>
-          <p className="mt-1 text-sm text-slate-600">
-            A {worstQuestion.label} apresentou o pior desempenho da turma (
-            {worstQuestion.accuracy}% de acerto). Sugestão: revisar o conteúdo
-            com exemplos guiados e prática direcionada.
-          </p>
-        </div>
-      )}
-    </section>
-  );
-}
-
-function TemplateView({ examConfig, schoolName, studentName, onBack }) {
+const TemplateView = memo(function TemplateView({
+  examConfig,
+  schoolName,
+  studentName,
+  onBack,
+}) {
   const questions = Array.from({ length: examConfig.questionCount }, (_, i) => i + 1);
+  const questionsPerColumn = Math.ceil(questions.length / 2);
+  const leftColumnQuestions = questions.slice(0, questionsPerColumn);
+  const rightColumnQuestions = questions.slice(questionsPerColumn);
 
   return (
     <section className="mx-auto w-full max-w-7xl px-3 pb-12 pt-4 sm:px-6">
@@ -1218,26 +742,44 @@ function TemplateView({ examConfig, schoolName, studentName, onBack }) {
             </div>
           </div>
 
-          <div className="mt-6 grid grid-cols-2 gap-x-8 gap-y-3 text-xs">
-            {questions.map((q) => (
-              <div key={q} className="flex items-center gap-2">
-                <span className="w-8 font-semibold text-slate-600">Q{q}</span>
-                <div className="flex gap-2">
-                  {OPTIONS.map((op) => (
-                    <div key={`${q}-${op}`} className="grid place-items-center gap-1">
-                      <div className="h-4 w-4 rounded-full border border-slate-400 bg-white" />
-                      <span className="text-[10px] text-slate-500">{op}</span>
-                    </div>
-                  ))}
+          <div className="mt-6 grid grid-cols-2 gap-x-8 text-xs">
+            <div className="space-y-3">
+              {leftColumnQuestions.map((q) => (
+                <div key={q} className="flex items-center gap-2">
+                  <span className="w-8 font-semibold text-slate-600">Q{q}</span>
+                  <div className="flex gap-2">
+                    {OPTIONS.map((op) => (
+                      <div key={`${q}-${op}`} className="grid place-items-center gap-1">
+                        <div className="h-5 w-5 rounded-full border-2 border-slate-400 bg-white" />
+                        <span className="text-[10px] text-slate-500">{op}</span>
+                      </div>
+                    ))}
+                  </div>
                 </div>
-              </div>
-            ))}
+              ))}
+            </div>
+
+            <div className="space-y-3">
+              {rightColumnQuestions.map((q) => (
+                <div key={q} className="flex items-center gap-2">
+                  <span className="w-8 font-semibold text-slate-600">Q{q}</span>
+                  <div className="flex gap-2">
+                    {OPTIONS.map((op) => (
+                      <div key={`${q}-${op}`} className="grid place-items-center gap-1">
+                        <div className="h-5 w-5 rounded-full border-2 border-slate-400 bg-white" />
+                        <span className="text-[10px] text-slate-500">{op}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
           </div>
         </div>
       </div>
     </section>
   );
-}
+});
 
 function ResultView({ result, onBackScanner, onOpenDashboard }) {
   return (
@@ -1389,7 +931,19 @@ export default function App() {
 
   const renderView = () => {
     if (activeView === "config") {
-      return <ConfigGabaritoView examConfig={examConfig} onSave={setExamConfig} />;
+      return (
+        <Suspense
+          fallback={
+            <section className="mx-auto w-full max-w-7xl px-4 pb-12 pt-6 sm:px-6">
+              <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+                <p className="text-sm text-slate-500">Carregando configuração...</p>
+              </div>
+            </section>
+          }
+        >
+          <LazyConfigGabaritoView examConfig={examConfig} onSave={setExamConfig} />
+        </Suspense>
+      );
     }
 
     if (activeView === "customize") {
@@ -1417,12 +971,22 @@ export default function App() {
 
     if (activeView === "dashboard") {
       return (
-        <DashboardView
-          examConfig={examConfig}
-          results={studentsResults}
-          onExport={handleExportBackup}
-          onClear={handleClearClass}
-        />
+        <Suspense
+          fallback={
+            <section className="mx-auto w-full max-w-7xl px-4 pb-12 pt-6 sm:px-6">
+              <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+                <p className="text-sm text-slate-500">Carregando dashboard...</p>
+              </div>
+            </section>
+          }
+        >
+          <LazyDashboardView
+            examConfig={examConfig}
+            results={studentsResults}
+            onExport={handleExportBackup}
+            onClear={handleClearClass}
+          />
+        </Suspense>
       );
     }
 
