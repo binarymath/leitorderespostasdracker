@@ -80,6 +80,300 @@ function randomAnswers(total) {
   );
 }
 
+const A4_WARP_WIDTH = 840;
+const A4_WARP_HEIGHT = 1188;
+
+function ensureOpenCvLoaded() {
+  if (typeof window === "undefined") {
+    return Promise.reject(new Error("window indisponível"));
+  }
+
+  if (window.cv && window.cv.Mat) {
+    return Promise.resolve(window.cv);
+  }
+
+  if (window.__drackerOpenCvPromise) {
+    return window.__drackerOpenCvPromise;
+  }
+
+  window.__drackerOpenCvPromise = new Promise((resolve, reject) => {
+    let script = document.getElementById("opencv-js");
+
+    const resolveWhenReady = () => {
+      if (window.cv && window.cv.Mat) {
+        resolve(window.cv);
+        return;
+      }
+
+      if (!window.cv) {
+        reject(new Error("OpenCV não inicializado"));
+        return;
+      }
+
+      window.cv.onRuntimeInitialized = () => {
+        resolve(window.cv);
+      };
+    };
+
+    if (!script) {
+      script = document.createElement("script");
+      script.id = "opencv-js";
+      script.src = "https://docs.opencv.org/4.x/opencv.js";
+      script.async = true;
+      script.onerror = () => reject(new Error("Falha ao carregar OpenCV.js"));
+      script.onload = resolveWhenReady;
+      document.body.appendChild(script);
+      return;
+    }
+
+    resolveWhenReady();
+  });
+
+  return window.__drackerOpenCvPromise;
+}
+
+function orderAnchorPoints(points) {
+  if (!Array.isArray(points) || points.length !== 4) return null;
+
+  const bySum = [...points].sort((a, b) => a.x + a.y - (b.x + b.y));
+  const byDiff = [...points].sort((a, b) => a.y - a.x - (b.y - b.x));
+
+  const tl = bySum[0];
+  const br = bySum[3];
+  const tr = byDiff[0];
+  const bl = byDiff[3];
+
+  return [tl, tr, br, bl];
+}
+
+function pickCornerAnchors(candidates, width, height) {
+  if (candidates.length < 4) return null;
+
+  const corners = [
+    { x: 0, y: 0 },
+    { x: width, y: 0 },
+    { x: width, y: height },
+    { x: 0, y: height },
+  ];
+
+  const chosen = [];
+  const used = new Set();
+
+  corners.forEach((corner) => {
+    let bestIndex = -1;
+    let bestDistance = Number.POSITIVE_INFINITY;
+
+    candidates.forEach((candidate, index) => {
+      if (used.has(index)) return;
+      const dx = candidate.x - corner.x;
+      const dy = candidate.y - corner.y;
+      const distance = Math.hypot(dx, dy);
+      if (distance < bestDistance) {
+        bestDistance = distance;
+        bestIndex = index;
+      }
+    });
+
+    if (bestIndex >= 0) {
+      used.add(bestIndex);
+      chosen.push(candidates[bestIndex]);
+    }
+  });
+
+  if (chosen.length !== 4) return null;
+  return orderAnchorPoints(chosen);
+}
+
+function detectAnchors(cv, rgbaMat) {
+  const gray = new cv.Mat();
+  const blur = new cv.Mat();
+  const thresholded = new cv.Mat();
+  const contours = new cv.MatVector();
+  const hierarchy = new cv.Mat();
+
+  try {
+    cv.cvtColor(rgbaMat, gray, cv.COLOR_RGBA2GRAY);
+    cv.GaussianBlur(gray, blur, new cv.Size(5, 5), 0, 0, cv.BORDER_DEFAULT);
+    cv.threshold(
+      blur,
+      thresholded,
+      0,
+      255,
+      cv.THRESH_BINARY_INV + cv.THRESH_OTSU,
+    );
+
+    cv.findContours(
+      thresholded,
+      contours,
+      hierarchy,
+      cv.RETR_LIST,
+      cv.CHAIN_APPROX_SIMPLE,
+    );
+
+    const areaFrame = rgbaMat.cols * rgbaMat.rows;
+    const minArea = areaFrame * 0.00008;
+    const maxArea = areaFrame * 0.02;
+
+    const candidates = [];
+    for (let i = 0; i < contours.size(); i += 1) {
+      const contour = contours.get(i);
+      const area = cv.contourArea(contour);
+      const perimeter = cv.arcLength(contour, true);
+
+      if (perimeter <= 0 || area < minArea || area > maxArea) {
+        contour.delete();
+        continue;
+      }
+
+      const circularity = (4 * Math.PI * area) / (perimeter * perimeter);
+      if (circularity < 0.68) {
+        contour.delete();
+        continue;
+      }
+
+      const moments = cv.moments(contour);
+      if (moments.m00 !== 0) {
+        candidates.push({
+          x: moments.m10 / moments.m00,
+          y: moments.m01 / moments.m00,
+          area,
+        });
+      }
+
+      contour.delete();
+    }
+
+    const anchors = pickCornerAnchors(candidates, rgbaMat.cols, rgbaMat.rows);
+    return anchors;
+  } finally {
+    gray.delete();
+    blur.delete();
+    thresholded.delete();
+    contours.delete();
+    hierarchy.delete();
+  }
+}
+
+function warpPaperToA4(cv, srcMat, anchors) {
+  if (!anchors || anchors.length !== 4) return null;
+
+  const srcTri = cv.matFromArray(4, 1, cv.CV_32FC2, [
+    anchors[0].x,
+    anchors[0].y,
+    anchors[1].x,
+    anchors[1].y,
+    anchors[2].x,
+    anchors[2].y,
+    anchors[3].x,
+    anchors[3].y,
+  ]);
+
+  const dstTri = cv.matFromArray(4, 1, cv.CV_32FC2, [
+    0,
+    0,
+    A4_WARP_WIDTH - 1,
+    0,
+    A4_WARP_WIDTH - 1,
+    A4_WARP_HEIGHT - 1,
+    0,
+    A4_WARP_HEIGHT - 1,
+  ]);
+
+  const matrix = cv.getPerspectiveTransform(srcTri, dstTri);
+  const warped = new cv.Mat();
+
+  cv.warpPerspective(
+    srcMat,
+    warped,
+    matrix,
+    new cv.Size(A4_WARP_WIDTH, A4_WARP_HEIGHT),
+    cv.INTER_LINEAR,
+    cv.BORDER_CONSTANT,
+    new cv.Scalar(),
+  );
+
+  srcTri.delete();
+  dstTri.delete();
+  matrix.delete();
+
+  return warped;
+}
+
+function buildBubbleCoordinatesPercent(questionCount) {
+  const top = 0.36;
+  const bottom = 0.88;
+  const leftColumnStart = 0.29;
+  const rightColumnStart = 0.76;
+  const optionSpacing = 0.032;
+  const rows = Math.ceil(questionCount / 2);
+
+  return Array.from({ length: questionCount }, (_, index) => {
+    const col = index % 2;
+    const row = Math.floor(index / 2);
+    const y = rows <= 1 ? top : top + (row * (bottom - top)) / (rows - 1);
+    const xStart = col === 0 ? leftColumnStart : rightColumnStart;
+
+    return OPTIONS.map((option, optIndex) => ({
+      option,
+      xPercent: xStart + optIndex * optionSpacing,
+      yPercent: y,
+    }));
+  });
+}
+
+function readAnswersFromWarped(cv, warpedMat, questionCount) {
+  const gray = new cv.Mat();
+  const binary = new cv.Mat();
+
+  try {
+    cv.cvtColor(warpedMat, gray, cv.COLOR_RGBA2GRAY);
+    cv.threshold(gray, binary, 0, 255, cv.THRESH_BINARY_INV + cv.THRESH_OTSU);
+
+    const layout = buildBubbleCoordinatesPercent(questionCount);
+    const radius = Math.max(6, Math.round(warpedMat.cols * 0.009));
+
+    const answers = layout.map((questionBubbles) => {
+      let best = { option: "A", density: -1 };
+
+      questionBubbles.forEach((bubble) => {
+        const cx = Math.round(bubble.xPercent * warpedMat.cols);
+        const cy = Math.round(bubble.yPercent * warpedMat.rows);
+
+        let dark = 0;
+        let total = 0;
+
+        const yStart = Math.max(0, cy - radius);
+        const yEnd = Math.min(binary.rows - 1, cy + radius);
+        const xStart = Math.max(0, cx - radius);
+        const xEnd = Math.min(binary.cols - 1, cx + radius);
+
+        for (let y = yStart; y <= yEnd; y += 1) {
+          for (let x = xStart; x <= xEnd; x += 1) {
+            const dx = x - cx;
+            const dy = y - cy;
+            if (dx * dx + dy * dy > radius * radius) continue;
+            total += 1;
+            const pixel = binary.ucharPtr(y, x)[0];
+            if (pixel > 0) dark += 1;
+          }
+        }
+
+        const density = total > 0 ? dark / total : 0;
+        if (density > best.density) {
+          best = { option: bubble.option, density };
+        }
+      });
+
+      return best.density >= 0.12 ? best.option : "A";
+    });
+
+    return answers;
+  } finally {
+    gray.delete();
+    binary.delete();
+  }
+}
+
 function Header({ activeView, onNavigate }) {
   const nav = [
     { id: "scanner", label: "Ler Respostas", icon: Camera },
@@ -367,48 +661,211 @@ function CustomizePrintView({
   );
 }
 
-function ScannerOverlay({ questionCount }) {
-  const items = Array.from({ length: questionCount }, (_, i) => i + 1);
-
-  return (
-    <div className="pointer-events-none absolute inset-0 flex items-center justify-center px-3">
-      <div className="relative h-[72vh] w-full max-w-[780px] rounded-2xl border-2 border-white/80 bg-slate-900/25 p-3 shadow-2xl backdrop-blur-[2px] sm:p-4">
-        <div className="absolute -left-1.5 -top-1.5 h-8 w-8 border-l-4 border-t-4 border-blue-500" />
-        <div className="absolute -right-1.5 -top-1.5 h-8 w-8 border-r-4 border-t-4 border-blue-500" />
-        <div className="absolute -bottom-1.5 -left-1.5 h-8 w-8 border-b-4 border-l-4 border-blue-500" />
-        <div className="absolute -bottom-1.5 -right-1.5 h-8 w-8 border-b-4 border-r-4 border-blue-500" />
-
-        <div className="grid h-full grid-cols-2 gap-x-3 gap-y-1 overflow-hidden rounded-lg bg-white/10 p-2 sm:p-3">
-          {items.map((q) => (
-            <div
-              key={q}
-              className="grid grid-cols-[30px_repeat(5,minmax(0,1fr))] items-center gap-1"
-            >
-              <span className="text-[10px] font-semibold text-white/90 sm:text-xs">
-                Q{q}
-              </span>
-              {OPTIONS.map((option) => (
-                <div key={`${q}-${option}`} className="grid place-items-center gap-0.5">
-                  <span className="h-2.5 w-2.5 rounded-full border border-white/90 bg-transparent sm:h-3 sm:w-3" />
-                  <span className="text-[8px] font-medium leading-none text-white/80 sm:text-[9px]">
-                    {option}
-                  </span>
-                </div>
-              ))}
-            </div>
-          ))}
-        </div>
-      </div>
-    </div>
-  );
-}
-
 function ScannerView({ questionCount, onCapture }) {
   const videoRef = useRef(null);
   const streamRef = useRef(null);
+  const processingCanvasRef = useRef(null);
+  const overlayCanvasRef = useRef(null);
+
   const [isCameraActive, setIsCameraActive] = useState(false);
   const [cameraReady, setCameraReady] = useState(false);
   const [cameraBlocked, setCameraBlocked] = useState(false);
+  const [cvReady, setCvReady] = useState(false);
+  const [cvLoadError, setCvLoadError] = useState("");
+  const [anchorFeedback, setAnchorFeedback] = useState({
+    ready: false,
+    message: "Aguardando câmera...",
+    points: [],
+  });
+
+  const latestAnchorPointsRef = useRef(null);
+
+  const drawOverlayFeedback = (points) => {
+    const canvas = overlayCanvasRef.current;
+    const video = videoRef.current;
+    if (!canvas || !video) return;
+
+    const rect = canvas.getBoundingClientRect();
+    const width = Math.max(1, Math.floor(rect.width));
+    const height = Math.max(1, Math.floor(rect.height));
+
+    if (canvas.width !== width || canvas.height !== height) {
+      canvas.width = width;
+      canvas.height = height;
+    }
+
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+
+    ctx.clearRect(0, 0, width, height);
+
+    const guideX = width * 0.11;
+    const guideY = height * 0.08;
+    const guideW = width * 0.78;
+    const guideH = height * 0.82;
+
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = "rgba(255,255,255,0.85)";
+    ctx.strokeRect(guideX, guideY, guideW, guideH);
+
+    const rows = Math.ceil(questionCount / 2);
+    const top = guideY + guideH * 0.31;
+    const bottom = guideY + guideH * 0.93;
+    const leftBase = guideX + guideW * 0.22;
+    const rightBase = guideX + guideW * 0.72;
+
+    ctx.strokeStyle = "rgba(255,255,255,0.45)";
+    for (let q = 0; q < questionCount; q += 1) {
+      const col = q % 2;
+      const row = Math.floor(q / 2);
+      const y = rows <= 1 ? top : top + (row * (bottom - top)) / (rows - 1);
+      const xBase = col === 0 ? leftBase : rightBase;
+
+      for (let o = 0; o < OPTIONS.length; o += 1) {
+        const x = xBase + o * (guideW * 0.031);
+        ctx.beginPath();
+        ctx.arc(x, y, 4, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+    }
+
+    if (Array.isArray(points) && points.length === 4) {
+      const sx = width / Math.max(1, video.videoWidth || width);
+      const sy = height / Math.max(1, video.videoHeight || height);
+
+      ctx.strokeStyle = "rgba(34,197,94,0.95)";
+      ctx.fillStyle = "rgba(34,197,94,0.95)";
+      ctx.lineWidth = 2;
+
+      points.forEach((point, idx) => {
+        const px = point.x * sx;
+        const py = point.y * sy;
+        ctx.beginPath();
+        ctx.arc(px, py, 6, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.font = "12px sans-serif";
+        ctx.fillText(String(idx + 1), px + 8, py - 8);
+      });
+
+      ctx.beginPath();
+      ctx.moveTo(points[0].x * sx, points[0].y * sy);
+      ctx.lineTo(points[1].x * sx, points[1].y * sy);
+      ctx.lineTo(points[2].x * sx, points[2].y * sy);
+      ctx.lineTo(points[3].x * sx, points[3].y * sy);
+      ctx.closePath();
+      ctx.stroke();
+    }
+  };
+
+  const analyzeCurrentFrame = () => {
+    const cv = window.cv;
+    const video = videoRef.current;
+    const canvas = processingCanvasRef.current;
+    if (!cv || !video || !canvas || !video.videoWidth || !video.videoHeight) {
+      return { ready: false, message: "Vídeo ainda não pronto", points: null };
+    }
+
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) {
+      return { ready: false, message: "Falha no contexto do canvas", points: null };
+    }
+
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    const src = cv.imread(canvas);
+
+    try {
+      const anchors = detectAnchors(cv, src);
+      if (!anchors) {
+        drawOverlayFeedback(null);
+        latestAnchorPointsRef.current = null;
+        return {
+          ready: false,
+          message: "Aponte para o gabarito com 4 âncoras visíveis",
+          points: null,
+        };
+      }
+
+      latestAnchorPointsRef.current = anchors;
+      drawOverlayFeedback(anchors);
+
+      return {
+        ready: true,
+        message: "Âncoras detectadas. Pode capturar.",
+        points: anchors,
+      };
+    } finally {
+      src.delete();
+    }
+  };
+
+  const handleCaptureWithCv = () => {
+    const cv = window.cv;
+    const video = videoRef.current;
+    const canvas = processingCanvasRef.current;
+    if (!cv || !video || !canvas) {
+      onCapture(null);
+      return;
+    }
+
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) {
+      onCapture(null);
+      return;
+    }
+
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    const src = cv.imread(canvas);
+
+    try {
+      const anchors = latestAnchorPointsRef.current || detectAnchors(cv, src);
+      if (!anchors) {
+        setAnchorFeedback({
+          ready: false,
+          message: "Sem âncoras válidas. Ajuste enquadramento.",
+          points: [],
+        });
+        return;
+      }
+
+      const warped = warpPaperToA4(cv, src, anchors);
+      if (!warped) {
+        onCapture(null);
+        return;
+      }
+
+      try {
+        const answers = readAnswersFromWarped(cv, warped, questionCount);
+        onCapture(answers);
+      } finally {
+        warped.delete();
+      }
+    } finally {
+      src.delete();
+    }
+  };
+
+  useEffect(() => {
+    let active = true;
+    ensureOpenCvLoaded()
+      .then(() => {
+        if (!active) return;
+        setCvReady(true);
+        setCvLoadError("");
+      })
+      .catch(() => {
+        if (!active) return;
+        setCvReady(false);
+        setCvLoadError("OpenCV.js ainda está a carregar ou indisponível.");
+      });
+
+    return () => {
+      active = false;
+    };
+  }, []);
 
   useEffect(() => {
     if (!isCameraActive) return undefined;
@@ -441,6 +898,7 @@ function ScannerView({ questionCount, onCapture }) {
           videoRef.current.srcObject = stream;
           await videoRef.current.play();
           setCameraReady(true);
+          drawOverlayFeedback(null);
         }
       } catch {
         setCameraBlocked(true);
@@ -457,6 +915,21 @@ function ScannerView({ questionCount, onCapture }) {
       }
     };
   }, [isCameraActive]);
+
+  useEffect(() => {
+    if (!isCameraActive || !cameraReady || !cvReady || cameraBlocked) return undefined;
+
+    const timer = window.setInterval(() => {
+      const result = analyzeCurrentFrame();
+      setAnchorFeedback({
+        ready: result.ready,
+        message: result.message,
+        points: result.points || [],
+      });
+    }, 220);
+
+    return () => window.clearInterval(timer);
+  }, [isCameraActive, cameraReady, cvReady, cameraBlocked]);
 
   if (!isCameraActive) {
     return (
@@ -475,6 +948,11 @@ function ScannerView({ questionCount, onCapture }) {
             onClick={() => {
               setCameraBlocked(false);
               setCameraReady(false);
+              setAnchorFeedback({
+                ready: false,
+                message: "Iniciando leitura...",
+                points: [],
+              });
               setIsCameraActive(true);
             }}
             className="mt-6 inline-flex items-center gap-2 rounded-xl bg-blue-600 px-5 py-3 text-sm font-medium text-white transition hover:bg-blue-700"
@@ -523,18 +1001,54 @@ function ScannerView({ questionCount, onCapture }) {
         </div>
       )}
 
-      <ScannerOverlay questionCount={questionCount} />
+      <canvas
+        ref={overlayCanvasRef}
+        className="pointer-events-none absolute inset-0 h-full w-full"
+      />
+
+      <canvas ref={processingCanvasRef} className="hidden" />
+
+      <div className="absolute left-1/2 top-4 z-20 -translate-x-1/2">
+        <div
+          className={`rounded-full px-3 py-1 text-xs font-medium shadow-sm ${
+            anchorFeedback.ready
+              ? "bg-emerald-100 text-emerald-700"
+              : "bg-slate-100 text-slate-700"
+          }`}
+        >
+          {anchorFeedback.message}
+        </div>
+      </div>
+
+      {cvLoadError && (
+        <div className="absolute left-1/2 top-12 z-20 -translate-x-1/2 rounded-full bg-amber-100 px-3 py-1 text-xs font-medium text-amber-700 shadow-sm">
+          {cvLoadError} Use modo fallback para continuar.
+        </div>
+      )}
 
       <div className="no-print absolute inset-x-0 bottom-0 flex justify-center pb-7 pt-6">
-        <button
-          type="button"
-          onClick={onCapture}
-          className="group relative inline-flex h-24 w-24 items-center justify-center rounded-full bg-white shadow-xl ring-8 ring-white/20 transition active:scale-95"
-          aria-label="Capturar gabarito"
-        >
-          <span className="absolute h-19 w-19 rounded-full border-4 border-blue-600" />
-          <span className="h-5 w-5 rounded-full bg-blue-600 transition group-active:scale-125" />
-        </button>
+        <div className="flex flex-col items-center gap-2">
+          <button
+            type="button"
+            onClick={handleCaptureWithCv}
+            disabled={!cvReady || !anchorFeedback.ready}
+            className="group relative inline-flex h-24 w-24 items-center justify-center rounded-full bg-white shadow-xl ring-8 ring-white/20 transition active:scale-95 disabled:cursor-not-allowed disabled:opacity-60"
+            aria-label="Capturar gabarito"
+          >
+            <span className="absolute h-20 w-20 rounded-full border-4 border-blue-600" />
+            <span className="h-5 w-5 rounded-full bg-blue-600 transition group-active:scale-125" />
+          </button>
+
+          {!cvReady && (
+            <button
+              type="button"
+              onClick={() => onCapture(null)}
+              className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-700"
+            >
+              Continuar sem OpenCV (fallback)
+            </button>
+          )}
+        </div>
       </div>
     </section>
   );
@@ -814,10 +1328,13 @@ export default function App() {
     }
   }, [examConfig, setExamConfig]);
 
-  const handleCapture = () => {
+  const handleCapture = (capturedAnswers) => {
     const totalQuestions = examConfig.questionCount;
     const official = examConfig.answers.slice(0, totalQuestions);
-    const studentAnswers = randomAnswers(totalQuestions);
+    const studentAnswers =
+      Array.isArray(capturedAnswers) && capturedAnswers.length === totalQuestions
+        ? capturedAnswers
+        : randomAnswers(totalQuestions);
     const correctCount = studentAnswers.reduce(
       (acc, answer, idx) => (answer === official[idx] ? acc + 1 : acc),
       0,
