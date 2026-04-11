@@ -34,15 +34,15 @@ const STORAGE_KEYS = {
 };
 
 const BUBBLE_GEOMETRY = {
-  guideX: 0.11,
-  guideY: 0.08,
-  guideW: 0.78,
-  guideH: 0.82,
-  top: 0.31,
-  bottom: 0.93,
-  leftStart: 0.22,
-  rightStart: 0.72,
-  optionSpacing: 0.038,
+  infoX: 0.18,
+  infoY: 0.28,
+  infoW: 0.64,
+  infoH: 0.6,
+  top: 0.1,
+  bottom: 0.95,
+  leftStart: 0.16,
+  rightStart: 0.77,
+  optionSpacing: 0.046,
   overlayRadius: 6,
 };
 
@@ -127,13 +127,6 @@ function randomStudentName() {
   return `${first[Math.floor(Math.random() * first.length)]} ${
     last[Math.floor(Math.random() * last.length)]
   }`;
-}
-
-function randomAnswers(total) {
-  return Array.from(
-    { length: total },
-    () => OPTIONS[Math.floor(Math.random() * OPTIONS.length)],
-  );
 }
 
 function Header({ activeView, onNavigate }) {
@@ -310,7 +303,52 @@ const ScannerOverlay = memo(function ScannerOverlay({
   workerLoading,
 }) {
   return (
-    <>
+    <div className="pointer-events-none absolute inset-0">
+      <div className="absolute inset-0 bg-slate-950/35" />
+
+      <div className="absolute inset-0 flex items-center justify-center px-4 py-6">
+        <div className="relative aspect-[210/297] w-[min(88vw,500px)] max-h-[75vh] overflow-hidden rounded-2xl border border-white/35 bg-slate-900/15 shadow-2xl backdrop-blur-[2px]">
+          <div className="absolute inset-0 bg-gradient-to-b from-blue-500/10 via-transparent to-blue-500/10" />
+
+          <div className="absolute left-[18%] top-[28%] h-[60%] w-[64%] rounded-xl border border-white/45 bg-blue-500/5">
+            <div className="absolute inset-x-2 top-1/2 h-px -translate-y-1/2 bg-blue-400/60 animate-pulse" />
+
+            <div className="absolute left-0 top-0 h-8 w-8">
+              <div className="absolute left-0 top-0 h-5 w-[2px] rounded bg-blue-500 shadow-[0_0_12px_rgba(59,130,246,0.9)]" />
+              <div className="absolute left-0 top-0 h-[2px] w-5 rounded bg-blue-500 shadow-[0_0_12px_rgba(59,130,246,0.9)]" />
+              <div className="absolute left-1.5 top-1.5 h-4 w-4 rounded-full border border-dashed border-white/70" />
+            </div>
+
+            <div className="absolute right-0 top-0 h-8 w-8">
+              <div className="absolute right-0 top-0 h-5 w-[2px] rounded bg-blue-500 shadow-[0_0_12px_rgba(59,130,246,0.9)]" />
+              <div className="absolute right-0 top-0 h-[2px] w-5 rounded bg-blue-500 shadow-[0_0_12px_rgba(59,130,246,0.9)]" />
+              <div className="absolute right-1.5 top-1.5 h-4 w-4 rounded-full border border-dashed border-white/70" />
+            </div>
+
+            <div className="absolute bottom-0 left-0 h-8 w-8">
+              <div className="absolute bottom-0 left-0 h-5 w-[2px] rounded bg-blue-500 shadow-[0_0_12px_rgba(59,130,246,0.9)]" />
+              <div className="absolute bottom-0 left-0 h-[2px] w-5 rounded bg-blue-500 shadow-[0_0_12px_rgba(59,130,246,0.9)]" />
+              <div className="absolute bottom-1.5 left-1.5 h-4 w-4 rounded-full border border-dashed border-white/70" />
+            </div>
+
+            <div className="absolute bottom-0 right-0 h-8 w-8">
+              <div className="absolute bottom-0 right-0 h-5 w-[2px] rounded bg-blue-500 shadow-[0_0_12px_rgba(59,130,246,0.9)]" />
+              <div className="absolute bottom-0 right-0 h-[2px] w-5 rounded bg-blue-500 shadow-[0_0_12px_rgba(59,130,246,0.9)]" />
+              <div className="absolute bottom-1.5 right-1.5 h-4 w-4 rounded-full border border-dashed border-white/70" />
+            </div>
+
+            <div className="absolute left-1/2 top-0 h-3 w-px -translate-x-1/2 bg-white/70" />
+            <div className="absolute bottom-0 left-1/2 h-3 w-px -translate-x-1/2 bg-white/70" />
+            <div className="absolute left-0 top-1/2 h-px w-3 -translate-y-1/2 bg-white/70" />
+            <div className="absolute right-0 top-1/2 h-px w-3 -translate-y-1/2 bg-white/70" />
+          </div>
+
+          <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 rounded-lg bg-slate-950/70 px-3 py-2 text-center text-[11px] font-semibold tracking-wide text-white/90">
+            ALINHE OS CÍRCULOS COM OS CANTOS DO PAPEL
+          </div>
+        </div>
+      </div>
+
       <canvas
         ref={overlayCanvasRef}
         className="pointer-events-none absolute inset-0 h-full w-full"
@@ -341,18 +379,20 @@ const ScannerOverlay = memo(function ScannerOverlay({
           {workerLoadError}
         </div>
       )}
-    </>
+    </div>
   );
 });
 
 function ScannerView({ questionCount, onCapture }) {
   const videoRef = useRef(null);
+  const scanFrameRef = useRef(null);
   const streamRef = useRef(null);
   const workerRef = useRef(null);
   const processingCanvasRef = useRef(null);
   const overlayCanvasRef = useRef(null);
   const pendingFrameRef = useRef(false);
   const latestAnswersRef = useRef(null);
+  const latestFrameSizeRef = useRef({ width: 1, height: 1 });
 
   const [isCameraActive, setIsCameraActive] = useState(false);
   const [cameraReady, setCameraReady] = useState(false);
@@ -366,12 +406,13 @@ function ScannerView({ questionCount, onCapture }) {
     points: [],
   });
 
-  const drawOverlayFeedback = (points) => {
+  const drawOverlayFeedback = (points, frameSize) => {
     const canvas = overlayCanvasRef.current;
-    const video = videoRef.current;
-    if (!canvas || !video) return;
+    const frame = scanFrameRef.current;
+    if (!canvas || !frame) return;
 
     const rect = canvas.getBoundingClientRect();
+    const frameRect = frame.getBoundingClientRect();
     const width = Math.max(1, Math.floor(rect.width));
     const height = Math.max(1, Math.floor(rect.height));
 
@@ -384,10 +425,15 @@ function ScannerView({ questionCount, onCapture }) {
     if (!ctx) return;
     ctx.clearRect(0, 0, width, height);
 
-    const guideX = width * BUBBLE_GEOMETRY.guideX;
-    const guideY = height * BUBBLE_GEOMETRY.guideY;
-    const guideW = width * BUBBLE_GEOMETRY.guideW;
-    const guideH = height * BUBBLE_GEOMETRY.guideH;
+    const fx = frameRect.left - rect.left;
+    const fy = frameRect.top - rect.top;
+    const fw = frameRect.width;
+    const fh = frameRect.height;
+
+    const guideX = fx + fw * BUBBLE_GEOMETRY.infoX;
+    const guideY = fy + fh * BUBBLE_GEOMETRY.infoY;
+    const guideW = fw * BUBBLE_GEOMETRY.infoW;
+    const guideH = fh * BUBBLE_GEOMETRY.infoH;
 
     ctx.lineWidth = 2;
     ctx.strokeStyle = "rgba(255,255,255,0.85)";
@@ -415,15 +461,17 @@ function ScannerView({ questionCount, onCapture }) {
     }
 
     if (Array.isArray(points) && points.length === 4) {
-      const sx = width / Math.max(1, video.videoWidth || width);
-      const sy = height / Math.max(1, video.videoHeight || height);
+      const baseWidth = frameSize?.width || fw;
+      const baseHeight = frameSize?.height || fh;
+      const sx = fw / Math.max(1, baseWidth);
+      const sy = fh / Math.max(1, baseHeight);
 
       ctx.strokeStyle = "rgba(34,197,94,0.95)";
       ctx.fillStyle = "rgba(34,197,94,0.95)";
 
       points.forEach((point, idx) => {
-        const px = point.x * sx;
-        const py = point.y * sy;
+        const px = fx + point.x * sx;
+        const py = fy + point.y * sy;
         ctx.beginPath();
         ctx.arc(px, py, 6, 0, Math.PI * 2);
         ctx.fill();
@@ -461,7 +509,11 @@ function ScannerView({ questionCount, onCapture }) {
 
       if (type === "processed") {
         pendingFrameRef.current = false;
-        drawOverlayFeedback(payload.anchors);
+        latestFrameSizeRef.current = {
+          width: payload.sourceWidth || 1,
+          height: payload.sourceHeight || 1,
+        };
+        drawOverlayFeedback(payload.anchors, latestFrameSizeRef.current);
         latestAnswersRef.current = payload.answers;
         setAnchorFeedback({
           ready: payload.ready,
@@ -540,29 +592,46 @@ function ScannerView({ questionCount, onCapture }) {
   useEffect(() => {
     if (!isCameraActive || !cameraReady || !workerReady || cameraBlocked) return undefined;
 
+    const maxProcessWidth = 960;
+    const tickMs = anchorFeedback.ready ? 900 : 380;
+
     const tick = window.setInterval(() => {
+      if (document.hidden) return;
       if (pendingFrameRef.current || !workerRef.current) return;
       const video = videoRef.current;
       const canvas = processingCanvasRef.current;
       if (!video || !canvas || !video.videoWidth || !video.videoHeight) return;
 
-      canvas.width = video.videoWidth;
-      canvas.height = video.videoHeight;
+      const scale = Math.min(1, maxProcessWidth / video.videoWidth);
+      const frameWidth = Math.max(1, Math.floor(video.videoWidth * scale));
+      const frameHeight = Math.max(1, Math.floor(video.videoHeight * scale));
+
+      if (canvas.width !== frameWidth || canvas.height !== frameHeight) {
+        canvas.width = frameWidth;
+        canvas.height = frameHeight;
+      }
 
       const ctx = canvas.getContext("2d", { willReadFrequently: true });
       if (!ctx) return;
 
-      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+      ctx.drawImage(video, 0, 0, frameWidth, frameHeight);
       const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
       pendingFrameRef.current = true;
       workerRef.current.postMessage({
         type: "process-frame",
         payload: { imageData, questionCount },
       });
-    }, 220);
+    }, tickMs);
 
     return () => window.clearInterval(tick);
-  }, [isCameraActive, cameraReady, workerReady, cameraBlocked, questionCount]);
+  }, [
+    isCameraActive,
+    cameraReady,
+    workerReady,
+    cameraBlocked,
+    questionCount,
+    anchorFeedback.ready,
+  ]);
 
   const handleCapture = () => {
     if (workerReady && anchorFeedback.ready && Array.isArray(latestAnswersRef.current)) {
@@ -570,7 +639,11 @@ function ScannerView({ questionCount, onCapture }) {
       return;
     }
 
-    onCapture(null);
+    setAnchorFeedback({
+      ready: false,
+      message: "Alinhar as âncoras para capturar.",
+      points: [],
+    });
   };
 
   if (!isCameraActive) {
@@ -611,13 +684,22 @@ function ScannerView({ questionCount, onCapture }) {
     <section className="relative h-[calc(100vh-4rem)] w-full overflow-hidden bg-slate-900">
       {!cameraBlocked ? (
         <>
-          <video
-            ref={videoRef}
-            className="h-full w-full object-cover"
-            autoPlay
-            playsInline
-            muted
-          />
+          <div className="absolute inset-0 bg-slate-950/80" />
+          <div className="absolute inset-0 flex items-center justify-center px-4 py-6">
+            <div
+              ref={scanFrameRef}
+              className="relative aspect-[210/297] w-[min(88vw,500px)] max-h-[75vh] overflow-hidden rounded-2xl border border-white/20 bg-slate-900 shadow-2xl"
+            >
+              <video
+                ref={videoRef}
+                className="h-full w-full object-cover"
+                autoPlay
+                playsInline
+                muted
+              />
+            </div>
+          </div>
+
           {!cameraReady && (
             <div className="absolute inset-0 grid place-items-center bg-slate-900/60">
               <p className="text-sm font-medium text-white">Iniciando câmera...</p>
@@ -665,13 +747,9 @@ function ScannerView({ questionCount, onCapture }) {
           </button>
 
           {!workerReady && (
-            <button
-              type="button"
-              onClick={() => onCapture(null)}
-              className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-700"
-            >
-              Continuar sem OpenCV (fallback)
-            </button>
+            <p className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-700">
+              OpenCV em carregamento. Aguarde para capturar.
+            </p>
           )}
         </div>
       </div>
@@ -715,7 +793,38 @@ const TemplateView = memo(function TemplateView({
       </div>
 
       <div className="overflow-x-auto rounded-2xl border border-slate-200 bg-slate-100 p-3 sm:p-6">
-        <div className="print-area mx-auto min-h-[297mm] w-[210mm] bg-white p-6 text-slate-900 shadow-md">
+        <div className="print-area relative mx-auto min-h-[297mm] w-[210mm] bg-white p-6 text-slate-900 shadow-md">
+          <div className="pointer-events-none absolute inset-3 rounded-xl border border-slate-300">
+            <div className="absolute left-2 top-2 h-8 w-8">
+              <div className="absolute left-0 top-0 h-5 w-[2px] bg-blue-600" />
+              <div className="absolute left-0 top-0 h-[2px] w-5 bg-blue-600" />
+              <div className="absolute left-1.5 top-1.5 h-4 w-4 rounded-full border border-dashed border-slate-500" />
+            </div>
+
+            <div className="absolute right-2 top-2 h-8 w-8">
+              <div className="absolute right-0 top-0 h-5 w-[2px] bg-blue-600" />
+              <div className="absolute right-0 top-0 h-[2px] w-5 bg-blue-600" />
+              <div className="absolute right-1.5 top-1.5 h-4 w-4 rounded-full border border-dashed border-slate-500" />
+            </div>
+
+            <div className="absolute bottom-2 left-2 h-8 w-8">
+              <div className="absolute bottom-0 left-0 h-5 w-[2px] bg-blue-600" />
+              <div className="absolute bottom-0 left-0 h-[2px] w-5 bg-blue-600" />
+              <div className="absolute bottom-1.5 left-1.5 h-4 w-4 rounded-full border border-dashed border-slate-500" />
+            </div>
+
+            <div className="absolute bottom-2 right-2 h-8 w-8">
+              <div className="absolute bottom-0 right-0 h-5 w-[2px] bg-blue-600" />
+              <div className="absolute bottom-0 right-0 h-[2px] w-5 bg-blue-600" />
+              <div className="absolute bottom-1.5 right-1.5 h-4 w-4 rounded-full border border-dashed border-slate-500" />
+            </div>
+
+            <div className="absolute left-1/2 top-0 h-3 w-px -translate-x-1/2 bg-slate-400" />
+            <div className="absolute bottom-0 left-1/2 h-3 w-px -translate-x-1/2 bg-slate-400" />
+            <div className="absolute left-0 top-1/2 h-px w-3 -translate-y-1/2 bg-slate-400" />
+            <div className="absolute right-0 top-1/2 h-px w-3 -translate-y-1/2 bg-slate-400" />
+          </div>
+
           <div className="border-b border-slate-200 pb-4">
             <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
               {schoolName || "Escola não informada"}
@@ -742,37 +851,44 @@ const TemplateView = memo(function TemplateView({
             </div>
           </div>
 
-          <div className="mt-6 grid grid-cols-2 gap-x-8 text-xs">
-            <div className="space-y-3">
-              {leftColumnQuestions.map((q) => (
-                <div key={q} className="flex items-center gap-2">
-                  <span className="w-8 font-semibold text-slate-600">Q{q}</span>
-                  <div className="flex gap-2">
-                    {OPTIONS.map((op) => (
-                      <div key={`${q}-${op}`} className="grid place-items-center gap-1">
-                        <div className="h-5 w-5 rounded-full border-2 border-slate-400 bg-white" />
-                        <span className="text-[10px] text-slate-500">{op}</span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              ))}
-            </div>
+          <div className="relative mt-6 rounded-xl border border-slate-300 p-3">
+            <div className="pointer-events-none absolute left-2 top-2 h-6 w-6 border-l-2 border-t-2 border-blue-600" />
+            <div className="pointer-events-none absolute right-2 top-2 h-6 w-6 border-r-2 border-t-2 border-blue-600" />
+            <div className="pointer-events-none absolute bottom-2 left-2 h-6 w-6 border-b-2 border-l-2 border-blue-600" />
+            <div className="pointer-events-none absolute bottom-2 right-2 h-6 w-6 border-b-2 border-r-2 border-blue-600" />
 
-            <div className="space-y-3">
-              {rightColumnQuestions.map((q) => (
-                <div key={q} className="flex items-center gap-2">
-                  <span className="w-8 font-semibold text-slate-600">Q{q}</span>
-                  <div className="flex gap-2">
-                    {OPTIONS.map((op) => (
-                      <div key={`${q}-${op}`} className="grid place-items-center gap-1">
-                        <div className="h-5 w-5 rounded-full border-2 border-slate-400 bg-white" />
-                        <span className="text-[10px] text-slate-500">{op}</span>
-                      </div>
-                    ))}
+            <div className="grid grid-cols-2 gap-x-8 text-xs">
+              <div className="space-y-3">
+                {leftColumnQuestions.map((q) => (
+                  <div key={q} className="flex items-center gap-2">
+                    <span className="w-8 font-semibold text-slate-600">Q{q}</span>
+                    <div className="flex gap-2">
+                      {OPTIONS.map((op) => (
+                        <div key={`${q}-${op}`} className="grid place-items-center gap-1">
+                          <div className="h-5 w-5 rounded-full border-2 border-slate-400 bg-white" />
+                          <span className="text-[10px] text-slate-500">{op}</span>
+                        </div>
+                      ))}
+                    </div>
                   </div>
-                </div>
-              ))}
+                ))}
+              </div>
+
+              <div className="space-y-3">
+                {rightColumnQuestions.map((q) => (
+                  <div key={q} className="flex items-center gap-2">
+                    <span className="w-8 font-semibold text-slate-600">Q{q}</span>
+                    <div className="flex gap-2">
+                      {OPTIONS.map((op) => (
+                        <div key={`${q}-${op}`} className="grid place-items-center gap-1">
+                          <div className="h-5 w-5 rounded-full border-2 border-slate-400 bg-white" />
+                          <span className="text-[10px] text-slate-500">{op}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
             </div>
           </div>
         </div>
@@ -873,10 +989,11 @@ export default function App() {
   const handleCapture = (capturedAnswers) => {
     const totalQuestions = examConfig.questionCount;
     const official = examConfig.answers.slice(0, totalQuestions);
-    const studentAnswers =
-      Array.isArray(capturedAnswers) && capturedAnswers.length === totalQuestions
-        ? capturedAnswers
-        : randomAnswers(totalQuestions);
+    if (!Array.isArray(capturedAnswers) || capturedAnswers.length !== totalQuestions) {
+      return;
+    }
+
+    const studentAnswers = capturedAnswers;
     const correctCount = studentAnswers.reduce(
       (acc, answer, idx) => (answer === official[idx] ? acc + 1 : acc),
       0,

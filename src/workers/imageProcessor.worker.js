@@ -4,15 +4,15 @@ const OPTIONS = ["A", "B", "C", "D", "E"];
 const A4_WARP_WIDTH = 840;
 const A4_WARP_HEIGHT = 1188;
 const BUBBLE_GEOMETRY = {
-  guideX: 0.11,
-  guideY: 0.08,
-  guideW: 0.78,
-  guideH: 0.82,
+  infoX: 0.18,
+  infoY: 0.28,
+  infoW: 0.64,
+  infoH: 0.6,
   top: 0.31,
   bottom: 0.93,
-  leftStart: 0.22,
-  rightStart: 0.72,
-  optionSpacing: 0.038,
+  leftStart: 0.16,
+  rightStart: 0.77,
+  optionSpacing: 0.046,
   samplingRadiusScale: 0.012,
 };
 
@@ -202,14 +202,14 @@ function warpPaperToA4(srcMat, anchors) {
 }
 
 function buildBubbleCoordinatesPercent(questionCount) {
-  const top = BUBBLE_GEOMETRY.guideY + BUBBLE_GEOMETRY.guideH * BUBBLE_GEOMETRY.top;
+  const top = BUBBLE_GEOMETRY.infoY + BUBBLE_GEOMETRY.infoH * BUBBLE_GEOMETRY.top;
   const bottom =
-    BUBBLE_GEOMETRY.guideY + BUBBLE_GEOMETRY.guideH * BUBBLE_GEOMETRY.bottom;
+    BUBBLE_GEOMETRY.infoY + BUBBLE_GEOMETRY.infoH * BUBBLE_GEOMETRY.bottom;
   const leftColumnStart =
-    BUBBLE_GEOMETRY.guideX + BUBBLE_GEOMETRY.guideW * BUBBLE_GEOMETRY.leftStart;
+    BUBBLE_GEOMETRY.infoX + BUBBLE_GEOMETRY.infoW * BUBBLE_GEOMETRY.leftStart;
   const rightColumnStart =
-    BUBBLE_GEOMETRY.guideX + BUBBLE_GEOMETRY.guideW * BUBBLE_GEOMETRY.rightStart;
-  const optionSpacing = BUBBLE_GEOMETRY.guideW * BUBBLE_GEOMETRY.optionSpacing;
+    BUBBLE_GEOMETRY.infoX + BUBBLE_GEOMETRY.infoW * BUBBLE_GEOMETRY.rightStart;
+  const optionSpacing = BUBBLE_GEOMETRY.infoW * BUBBLE_GEOMETRY.optionSpacing;
   const rows = Math.ceil(questionCount / 2);
 
   return Array.from({ length: questionCount }, (_, index) => {
@@ -280,6 +280,8 @@ function readAnswersFromWarped(warpedMat, questionCount) {
 }
 
 function processFrame(imageData, questionCount) {
+  const sourceWidth = imageData.width;
+  const sourceHeight = imageData.height;
   const src = cv.matFromImageData(imageData);
 
   try {
@@ -287,9 +289,11 @@ function processFrame(imageData, questionCount) {
     if (!anchors) {
       return {
         ready: false,
-        message: "Aponte para o gabarito com 4 âncoras visíveis",
+        message: "Alinhar as âncoras para continuar",
         anchors: [],
         answers: null,
+        sourceWidth,
+        sourceHeight,
       };
     }
 
@@ -301,6 +305,8 @@ function processFrame(imageData, questionCount) {
         message: "Âncoras detectadas. Pode capturar.",
         anchors,
         answers,
+        sourceWidth,
+        sourceHeight,
       };
     } finally {
       warped.delete();
