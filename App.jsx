@@ -82,7 +82,7 @@ function randomAnswers(total) {
 
 function Header({ activeView, onNavigate }) {
   const nav = [
-    { id: "scanner", label: "Câmera", icon: Camera },
+    { id: "scanner", label: "Ler Respostas", icon: Camera },
     { id: "config", label: "Configurar Gabarito", icon: Settings2 },
     { id: "customize", label: "Customizar & Imprimir", icon: Printer },
     { id: "dashboard", label: "Dashboard", icon: LayoutDashboard },
@@ -406,10 +406,13 @@ function ScannerOverlay({ questionCount }) {
 function ScannerView({ questionCount, onCapture }) {
   const videoRef = useRef(null);
   const streamRef = useRef(null);
+  const [isCameraActive, setIsCameraActive] = useState(false);
   const [cameraReady, setCameraReady] = useState(false);
   const [cameraBlocked, setCameraBlocked] = useState(false);
 
   useEffect(() => {
+    if (!isCameraActive) return undefined;
+
     let cancelled = false;
 
     async function startCamera() {
@@ -453,7 +456,36 @@ function ScannerView({ questionCount, onCapture }) {
         streamRef.current = null;
       }
     };
-  }, []);
+  }, [isCameraActive]);
+
+  if (!isCameraActive) {
+    return (
+      <section className="mx-auto flex h-[calc(100vh-4rem)] w-full max-w-7xl items-center px-4 sm:px-6">
+        <div className="w-full rounded-2xl border border-slate-200 bg-white p-8 text-center shadow-sm">
+          <div className="mx-auto mb-4 inline-flex rounded-full bg-blue-50 p-3 text-blue-600">
+            <Camera className="h-6 w-6" />
+          </div>
+          <h2 className="text-xl font-semibold text-slate-900">Leitor de Respostas</h2>
+          <p className="mx-auto mt-2 max-w-lg text-sm text-slate-500">
+            Para iniciar a leitura, toque no botão abaixo e abra a câmera quando
+            quiser começar.
+          </p>
+          <button
+            type="button"
+            onClick={() => {
+              setCameraBlocked(false);
+              setCameraReady(false);
+              setIsCameraActive(true);
+            }}
+            className="mt-6 inline-flex items-center gap-2 rounded-xl bg-blue-600 px-5 py-3 text-sm font-medium text-white transition hover:bg-blue-700"
+          >
+            <Camera className="h-4 w-4" />
+            Ler Respostas
+          </button>
+        </div>
+      </section>
+    );
+  }
 
   return (
     <section className="relative h-[calc(100vh-4rem)] w-full overflow-hidden bg-slate-900">
