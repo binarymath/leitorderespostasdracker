@@ -18,6 +18,7 @@ const BUBBLE_GEOMETRY = {
 
 let cvReady = false;
 let cv = null;
+let qrReady = false;
 
 function loadOpenCvInWorker() {
   return new Promise((resolve, reject) => {
@@ -34,7 +35,7 @@ function loadOpenCvInWorker() {
         resolve();
         return;
       }
-      reject(new Error("OpenCV não iniciou no worker"));
+      reject(new Error("OpenCV nao iniciou no worker"));
     };
 
     try {
@@ -57,6 +58,16 @@ function loadOpenCvInWorker() {
       reject(error);
     }
   });
+}
+
+function loadJsQrInWorker() {
+  if (typeof self.jsQR === "function") {
+    qrReady = true;
+    return;
+  }
+
+  self.importScripts("https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js");
+  qrReady = typeof self.jsQR === "function";
 }
 
 function orderAnchorPoints(points) {
@@ -232,7 +243,16 @@ function readAnswersFromWarped(warpedMat, questionCount) {
 
   try {
     cv.cvtColor(warpedMat, gray, cv.COLOR_RGBA2GRAY);
-    cv.threshold(gray, binary, 0, 255, cv.THRESH_BINARY_INV + cv.THRESH_OTSU);
+
+    cv.adaptiveThreshold(
+      gray,
+      binary,
+      255,
+      cv.ADAPTIVE_THRESH_GAUSSIAN_C,
+      cv.THRESH_BINARY_INV,
+      29,
+      7,
+    );
 
     const layout = buildBubbleCoordinatesPercent(questionCount);
     const radius = Math.max(
@@ -279,7 +299,20 @@ function readAnswersFromWarped(warpedMat, questionCount) {
   }
 }
 
-function processFrame(imageData, questionCount) {
+function decodeQrFromWarped(warpedMat) {
+  if (!qrReady || typeof self.jsQR !== "function") {
+    return null;
+  }
+
+  const rgba = new Uint8ClampedArray(warpedMat.data);
+  const qrResult = self.jsQR(rgba, warpedMat.cols, warpedMat.rows, {
+    inversionAttempts: "attemptBoth",
+  });
+
+  return qrResult?.data || null;
+}
+
+function processLiveFrame(imageData, questionCount) {
   const sourceWidth = imageData.width;
   const sourceHeight = imageData.height;
   const src = cv.matFromImageData(imageData);
@@ -289,7 +322,7 @@ function processFrame(imageData, questionCount) {
     if (!anchors) {
       return {
         ready: false,
-        message: "Alinhar as âncoras para continuar",
+        message: "Alinhar os circulos para continuar",
         anchors: [],
         answers: null,
         sourceWidth,
@@ -302,7 +335,7 @@ function processFrame(imageData, questionCount) {
       const answers = readAnswersFromWarped(warped, questionCount);
       return {
         ready: true,
-        message: "Âncoras detectadas. Pode capturar.",
+        message: "Circulos detectados. Pode capturar.",
         anchors,
         answers,
         sourceWidth,
@@ -316,12 +349,85 @@ function processFrame(imageData, questionCount) {
   }
 }
 
+function processCaptureFrame(imageData, questionCount) {
+  const src = cv.matFromImageData(imageData);
+
+  try {
+    const anchors = detectAnchors(src);
+    if (!anchors) {
+      return {
+        success: false,
+        circlesDetected: false,
+        qrRead: false,
+        activityIdentified: false,
+        message: "Nao foi possivel detectar os 4 circulos de ancoragem.",
+      };
+    }
+
+    const warped = warpPaperToA4(src, anchors);
+    try {
+      const answers = readAnswersFromWarped(warped, questionCount);
+      const qrData = decodeQrFromWarped(warped);
+      const parsed = qrData ? parseQrPayload(qrData) : null;
+
+      return {
+        success: true,
+        circlesDetected: true,
+        qrRead: Boolean(qrData),
+        activityIdentified: Boolean(parsed?.classId && parsed?.activityId),
+        qrData,
+        qrPayload: parsed,
+        answers,
+        anchors,
+        message: qrData
+          ? "Captura concluida com QR lido."
+          : "Captura concluida sem QR. Selecao manual sera usada.",
+      };
+    } finally {
+      warped.delete();
+    }
+  } finally {
+    src.delete();
+  }
+}
+
+function parseQrPayload(raw) {
+  try {
+    const parsed = JSON.parse(raw);
+    return {
+      classId: parsed.classId || parsed.c || null,
+      activityId: parsed.activityId || parsed.a || null,
+      studentId: parsed.studentId || parsed.s || null,
+      version: parsed.v || 1,
+    };
+  } catch {
+    const chunks = String(raw)
+      .split(";")
+      .map((part) => part.trim())
+      .filter(Boolean);
+
+    const map = chunks.reduce((acc, entry) => {
+      const [key, value] = entry.split("=");
+      if (key && value) acc[key.trim()] = value.trim();
+      return acc;
+    }, {});
+
+    return {
+      classId: map.classId || map.c || null,
+      activityId: map.activityId || map.a || null,
+      studentId: map.studentId || map.s || null,
+      version: Number(map.v || 1),
+    };
+  }
+}
+
 self.onmessage = async (event) => {
   const { type, payload } = event.data || {};
 
   if (type === "init-opencv") {
     try {
       await loadOpenCvInWorker();
+      loadJsQrInWorker();
       self.postMessage({ type: "opencv-ready" });
     } catch (error) {
       self.postMessage({
@@ -336,18 +442,39 @@ self.onmessage = async (event) => {
     if (!cvReady || !cv) {
       self.postMessage({
         type: "process-error",
-        message: "OpenCV indisponível no worker",
+        message: "OpenCV indisponivel no worker",
       });
       return;
     }
 
     try {
-      const result = processFrame(payload.imageData, payload.questionCount);
+      const result = processLiveFrame(payload.imageData, payload.questionCount);
       self.postMessage({ type: "processed", payload: result });
     } catch (error) {
       self.postMessage({
         type: "process-error",
         message: error?.message || "Erro no processamento do frame",
+      });
+    }
+    return;
+  }
+
+  if (type === "capture-frame") {
+    if (!cvReady || !cv) {
+      self.postMessage({
+        type: "capture-error",
+        message: "OpenCV indisponivel no worker",
+      });
+      return;
+    }
+
+    try {
+      const result = processCaptureFrame(payload.imageData, payload.questionCount);
+      self.postMessage({ type: "capture-result", payload: result });
+    } catch (error) {
+      self.postMessage({
+        type: "capture-error",
+        message: error?.message || "Erro ao capturar frame",
       });
     }
   }

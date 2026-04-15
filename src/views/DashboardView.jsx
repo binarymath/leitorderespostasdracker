@@ -1,26 +1,50 @@
 import React, { useMemo } from "react";
-import { Download, Trash2 } from "lucide-react";
+import { Download, Trash2, TrendingUp } from "lucide-react";
 
-export default function DashboardView({ examConfig, results, onExport, onClear }) {
+export default function DashboardView({
+  classes,
+  selectedClassId,
+  selectedActivityId,
+  onSelectClass,
+  onSelectActivity,
+  onExport,
+  onClearActivity,
+}) {
+  const selectedClass = useMemo(
+    () => classes.find((item) => item.id === selectedClassId) || null,
+    [classes, selectedClassId],
+  );
+
+  const selectedActivity = useMemo(
+    () =>
+      selectedClass?.activities?.find((item) => item.id === selectedActivityId) || null,
+    [selectedClass, selectedActivityId],
+  );
+
+  const scopedResults = selectedActivity?.results || [];
+
   const metrics = useMemo(() => {
-    const totalRead = results.length;
+    const totalRead = scopedResults.length;
     const average =
       totalRead > 0
-        ? results.reduce((sum, item) => sum + Number(item.score || 0), 0) / totalRead
+        ? scopedResults.reduce((sum, item) => sum + Number(item.score || 0), 0) / totalRead
         : 0;
     return { totalRead, average };
-  }, [results]);
+  }, [scopedResults]);
 
   const questionBars = useMemo(() => {
-    const totalQuestions = examConfig.questionCount;
+    if (!selectedActivity) return [];
+
+    const totalQuestions = selectedActivity.questionCount;
     return Array.from({ length: totalQuestions }, (_, idx) => {
-      const hits = results.filter(
-        (item) => item.studentAnswers?.[idx] === examConfig.answers?.[idx],
+      const hits = scopedResults.filter(
+        (item) => item.studentAnswers?.[idx] === selectedActivity.officialKey?.[idx],
       ).length;
-      const accuracy = results.length > 0 ? Math.round((hits / results.length) * 100) : 0;
+      const accuracy =
+        scopedResults.length > 0 ? Math.round((hits / scopedResults.length) * 100) : 0;
       return { label: `Q${idx + 1}`, accuracy };
     });
-  }, [examConfig, results]);
+  }, [selectedActivity, scopedResults]);
 
   const worstQuestion = useMemo(() => {
     if (!questionBars.length) return null;
@@ -29,18 +53,65 @@ export default function DashboardView({ examConfig, results, onExport, onClear }
     );
   }, [questionBars]);
 
+  const activityComparison = useMemo(() => {
+    if (!selectedClass) return [];
+
+    return selectedClass.activities.map((activity) => {
+      const total = activity.results.length;
+      const avg =
+        total > 0
+          ? activity.results.reduce((sum, item) => sum + Number(item.score || 0), 0) / total
+          : 0;
+
+      return {
+        id: activity.id,
+        name: activity.name,
+        average: Number(avg.toFixed(2)),
+        total,
+      };
+    });
+  }, [selectedClass]);
+
   return (
     <section className="mx-auto w-full max-w-7xl px-4 pb-12 pt-6 sm:px-6">
+      <div className="mb-3 grid gap-2 rounded-xl border border-slate-200 bg-white p-3 sm:grid-cols-2">
+        <select
+          value={selectedClassId || ""}
+          onChange={(event) => onSelectClass(event.target.value)}
+          className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm"
+        >
+          <option value="">Selecione a turma</option>
+          {classes.map((item) => (
+            <option key={item.id} value={item.id}>
+              {item.name}
+            </option>
+          ))}
+        </select>
+
+        <select
+          value={selectedActivityId || ""}
+          onChange={(event) => onSelectActivity(event.target.value)}
+          className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm"
+        >
+          <option value="">Selecione a atividade</option>
+          {(selectedClass?.activities || []).map((item) => (
+            <option key={item.id} value={item.id}>
+              {item.name}
+            </option>
+          ))}
+        </select>
+      </div>
+
       <div className="grid gap-3 sm:grid-cols-2">
         <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
           <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
-            Média da Turma
+            Media da atividade
           </p>
           <p className="mt-2 text-3xl font-bold text-slate-900">{metrics.average.toFixed(1)}</p>
         </div>
         <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
           <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
-            Total de Provas Lidas
+            Total de leituras
           </p>
           <p className="mt-2 text-3xl font-bold text-slate-900">{metrics.totalRead}</p>
         </div>
@@ -57,16 +128,16 @@ export default function DashboardView({ examConfig, results, onExport, onClear }
         </button>
         <button
           type="button"
-          onClick={onClear}
+          onClick={onClearActivity}
           className="no-print inline-flex items-center gap-2 rounded-lg bg-rose-600 px-3 py-2 text-xs font-medium text-white transition hover:bg-rose-700"
         >
           <Trash2 className="h-4 w-4" />
-          Limpar Turma
+          Limpar Resultados da Atividade
         </button>
       </div>
 
       <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-        <h3 className="mb-4 text-sm font-semibold text-slate-900">Taxa de acerto por questão</h3>
+        <h3 className="mb-4 text-sm font-semibold text-slate-900">Taxa de acerto por questao</h3>
 
         <div className="space-y-2">
           {questionBars.map((item) => (
@@ -78,15 +149,39 @@ export default function DashboardView({ examConfig, results, onExport, onClear }
               <span className="text-right text-xs font-semibold text-slate-700">{item.accuracy}%</span>
             </div>
           ))}
+          {questionBars.length === 0 && (
+            <p className="text-sm text-slate-500">Sem dados para a atividade selecionada.</p>
+          )}
+        </div>
+      </div>
+
+      <div className="mt-4 rounded-2xl border border-emerald-200 bg-emerald-50 p-4">
+        <div className="mb-2 inline-flex items-center gap-2 text-emerald-700">
+          <TrendingUp className="h-4 w-4" />
+          <h3 className="text-sm font-semibold">Evolucao entre atividades da turma</h3>
+        </div>
+        <div className="space-y-2">
+          {activityComparison.map((activity) => (
+            <div key={activity.id} className="rounded-lg border border-emerald-200 bg-white px-3 py-2">
+              <div className="flex items-center justify-between">
+                <p className="text-sm font-medium text-slate-800">{activity.name}</p>
+                <p className="text-sm font-semibold text-emerald-700">Media {activity.average.toFixed(1)}</p>
+              </div>
+              <p className="text-xs text-slate-500">Leituras: {activity.total}</p>
+            </div>
+          ))}
+          {activityComparison.length === 0 && (
+            <p className="text-sm text-slate-500">Selecione uma turma para comparar atividades.</p>
+          )}
         </div>
       </div>
 
       {worstQuestion && (
-        <div className="mt-4 rounded-2xl border border-fuchsia-200 bg-fuchsia-50 p-4">
-          <h3 className="text-sm font-semibold text-slate-900">Insight Pedagógico (IA)</h3>
+        <div className="mt-4 rounded-2xl border border-amber-200 bg-amber-50 p-4">
+          <h3 className="text-sm font-semibold text-slate-900">Insight Evolutivo</h3>
           <p className="mt-1 text-sm text-slate-600">
-            A {worstQuestion.label} apresentou o pior desempenho da turma ({worstQuestion.accuracy}%
-            de acerto). Sugestão: revisar o conteúdo com exemplos guiados e prática direcionada.
+            A {worstQuestion.label} teve o menor desempenho ({worstQuestion.accuracy}% de acerto)
+            nesta atividade. Reforce esse conteudo antes da proxima avaliacao.
           </p>
         </div>
       )}

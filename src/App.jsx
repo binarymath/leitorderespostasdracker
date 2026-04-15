@@ -1,25 +1,16 @@
-import React, {
-  Suspense,
-  lazy,
-  memo,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-} from "react";
+import React, { Suspense, lazy, memo, useEffect, useMemo, useRef, useState } from "react";
 import {
   Camera,
   CheckCircle2,
   ClipboardCheck,
-  Download,
   LayoutDashboard,
   Printer,
   School,
   Settings2,
-  Trash2,
   User,
   Users,
 } from "lucide-react";
+import QRCode from "qrcode";
 
 const LazyConfigGabaritoView = lazy(() => import("./views/ConfigGabaritoView.jsx"));
 const LazyDashboardView = lazy(() => import("./views/DashboardView.jsx"));
@@ -27,6 +18,7 @@ const LazyDashboardView = lazy(() => import("./views/DashboardView.jsx"));
 const OPTIONS = ["A", "B", "C", "D", "E"];
 
 const STORAGE_KEYS = {
+  v2Data: "dracker_v2_data",
   schoolInfo: "dracker_school_info",
   studentList: "dracker_student_list",
   officialKey: "dracker_official_key",
@@ -38,8 +30,8 @@ const BUBBLE_GEOMETRY = {
   infoY: 0.28,
   infoW: 0.64,
   infoH: 0.6,
-  top: 0.1,
-  bottom: 0.95,
+  top: 0.31,
+  bottom: 0.93,
   leftStart: 0.16,
   rightStart: 0.77,
   optionSpacing: 0.046,
@@ -129,11 +121,160 @@ function randomStudentName() {
   }`;
 }
 
+function createId(prefix) {
+  return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function createDefaultActivity(name = "Atividade 1") {
+  const questionCount = 20;
+  return {
+    id: createId("activity"),
+    name,
+    questionCount,
+    weight: 1,
+    officialKey: Array.from({ length: questionCount }, (_, idx) => OPTIONS[idx % OPTIONS.length]),
+    results: [],
+  };
+}
+
+function createDefaultClass(name = "Turma A") {
+  const students = Array.from({ length: 6 }, (_, idx) => ({
+    id: createId("student"),
+    name: `${randomStudentName()} ${idx + 1}`,
+  }));
+  const activity = createDefaultActivity("Prova 1");
+  return {
+    id: createId("class"),
+    name,
+    students,
+    activities: [activity],
+  };
+}
+
+function ensureActivity(activity) {
+  const count = Math.max(1, Number(activity?.questionCount) || 20);
+  const key = Array.from({ length: count }, (_, idx) => activity?.officialKey?.[idx] || "A");
+  return {
+    id: activity?.id || createId("activity"),
+    name: activity?.name || "Atividade",
+    questionCount: count,
+    weight: Number(activity?.weight || 1) > 0 ? Number(activity.weight) : 1,
+    officialKey: key,
+    results: Array.isArray(activity?.results) ? activity.results : [],
+  };
+}
+
+function ensureClass(classroom) {
+  const students = Array.isArray(classroom?.students)
+    ? classroom.students.map((student) => ({
+        id: student?.id || createId("student"),
+        name: student?.name || "Aluno sem nome",
+      }))
+    : [];
+
+  const activities = Array.isArray(classroom?.activities)
+    ? classroom.activities.map(ensureActivity)
+    : [createDefaultActivity()];
+
+  return {
+    id: classroom?.id || createId("class"),
+    name: classroom?.name || "Turma",
+    students,
+    activities: activities.length ? activities : [createDefaultActivity()],
+  };
+}
+
+function normalizeAppData(data) {
+  const classes = Array.isArray(data?.classes) ? data.classes.map(ensureClass) : [createDefaultClass()];
+  const firstClass = classes[0];
+  const selectedClassId =
+    classes.find((item) => item.id === data?.selectedClassId)?.id || firstClass.id;
+  const selectedClass = classes.find((item) => item.id === selectedClassId) || firstClass;
+  const selectedActivityId =
+    selectedClass.activities.find((item) => item.id === data?.selectedActivityId)?.id ||
+    selectedClass.activities[0].id;
+
+  return {
+    schoolInfo: { name: data?.schoolInfo?.name || "" },
+    classes,
+    selectedClassId,
+    selectedActivityId,
+  };
+}
+
+function migrateLegacyData() {
+  const fallback = normalizeAppData({ classes: [createDefaultClass()] });
+
+  if (typeof window === "undefined") return fallback;
+
+  try {
+    const v2Raw = window.localStorage.getItem(STORAGE_KEYS.v2Data);
+    if (v2Raw) {
+      return normalizeAppData(JSON.parse(v2Raw));
+    }
+
+    const schoolInfo = JSON.parse(window.localStorage.getItem(STORAGE_KEYS.schoolInfo) || "null") || {
+      name: "",
+    };
+    const studentList = JSON.parse(window.localStorage.getItem(STORAGE_KEYS.studentList) || "[]");
+    const examConfig = JSON.parse(window.localStorage.getItem(STORAGE_KEYS.officialKey) || "null") || {
+      questionCount: 20,
+      answers: Array.from({ length: 20 }, () => "A"),
+    };
+    const legacyResults = JSON.parse(window.localStorage.getItem(STORAGE_KEYS.studentsResults) || "[]");
+
+    const students = (Array.isArray(studentList) ? studentList : [])
+      .map((name) => String(name || "").trim())
+      .filter(Boolean)
+      .map((name) => ({ id: createId("student"), name }));
+
+    const count = Math.max(1, Number(examConfig.questionCount) || 20);
+    const activity = {
+      id: createId("activity"),
+      name: "Atividade Migrada",
+      questionCount: count,
+      weight: 1,
+      officialKey: Array.from({ length: count }, (_, idx) => examConfig?.answers?.[idx] || "A"),
+      results: Array.isArray(legacyResults)
+        ? legacyResults.map((item) => ({
+            ...item,
+            id: item?.id || Date.now() + Math.random(),
+            classId: null,
+            activityId: null,
+            studentId: null,
+            weightedScore:
+              typeof item?.weightedScore === "number"
+                ? item.weightedScore
+                : Number(item?.score || 0),
+          }))
+        : [],
+    };
+
+    const classroom = {
+      id: createId("class"),
+      name: "Turma Migrada",
+      students,
+      activities: [activity],
+    };
+
+    const migrated = normalizeAppData({
+      schoolInfo,
+      classes: [classroom],
+      selectedClassId: classroom.id,
+      selectedActivityId: activity.id,
+    });
+
+    return migrated;
+  } catch {
+    return fallback;
+  }
+}
+
 function Header({ activeView, onNavigate }) {
   const nav = [
-    { id: "scanner", label: "Ler Respostas", icon: Camera },
-    { id: "config", label: "Configurar Gabarito", icon: Settings2 },
-    { id: "customize", label: "Customizar & Imprimir", icon: Printer },
+    { id: "scanner", label: "Leitor Real", icon: Camera },
+    { id: "config", label: "Turmas e Atividades", icon: Settings2 },
+    { id: "template", label: "Templates A4", icon: Printer },
     { id: "dashboard", label: "Dashboard", icon: LayoutDashboard },
   ];
 
@@ -145,12 +286,8 @@ function Header({ activeView, onNavigate }) {
             <ClipboardCheck className="h-4 w-4" />
           </div>
           <div>
-            <h1 className="text-sm font-semibold text-slate-900 sm:text-base">
-              Leitor Drácker
-            </h1>
-            <p className="text-[11px] text-slate-500 sm:text-xs">
-              Leitor de Gabaritos Web
-            </p>
+            <h1 className="text-sm font-semibold text-slate-900 sm:text-base">Leitor Dracker</h1>
+            <p className="text-[11px] text-slate-500 sm:text-xs">Leitura real com QR e OpenCV</p>
           </div>
         </div>
 
@@ -180,197 +317,109 @@ function Header({ activeView, onNavigate }) {
   );
 }
 
-function CustomizePrintView({
-  schoolInfo,
-  studentList,
-  onSaveSchool,
-  onSaveStudents,
-  onOpenTemplate,
+function SelectionStrip({
+  classes,
+  selectedClassId,
+  selectedActivityId,
+  onSelectClass,
+  onSelectActivity,
 }) {
-  const [schoolNameInput, setSchoolNameInput] = useState(schoolInfo?.name || "");
-  const [studentsText, setStudentsText] = useState(studentList.join("\n"));
-  const [status, setStatus] = useState("");
-
-  useEffect(() => {
-    setSchoolNameInput(schoolInfo?.name || "");
-  }, [schoolInfo]);
-
-  useEffect(() => {
-    setStudentsText(studentList.join("\n"));
-  }, [studentList]);
-
-  const normalizedStudents = useMemo(() => {
-    return studentsText
-      .split("\n")
-      .map((name) => name.trim())
-      .filter(Boolean);
-  }, [studentsText]);
-
-  const handleSave = () => {
-    onSaveSchool({ name: schoolNameInput.trim() || "Escola não informada" });
-    onSaveStudents(normalizedStudents);
-    setStatus("Informações salvas com sucesso.");
-  };
+  const selectedClass = classes.find((item) => item.id === selectedClassId);
 
   return (
-    <section className="mx-auto w-full max-w-7xl px-4 pb-12 pt-6 sm:px-6">
-      <div className="grid gap-4 lg:grid-cols-[1.2fr_1fr]">
-        <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
-          <div className="mb-4 flex items-center gap-2">
-            <School className="h-5 w-5 text-blue-600" />
-            <h2 className="text-base font-semibold text-slate-900">
-              Customizar & Imprimir
-            </h2>
-          </div>
+    <div className="w-full rounded-xl border border-white/20 bg-slate-900/78 p-3 backdrop-blur-sm">
+      <p className="mb-2 text-[11px] font-semibold tracking-wide text-white/85">CONTEXTO DA LEITURA</p>
+      <div className="grid gap-2 sm:grid-cols-2">
+        <select
+          value={selectedClassId || ""}
+          onChange={(event) => onSelectClass(event.target.value)}
+          className="rounded-lg border border-slate-600 bg-slate-800 px-3 py-2 text-xs text-slate-100"
+        >
+          <option value="">Turma</option>
+          {classes.map((item) => (
+            <option key={item.id} value={item.id}>
+              {item.name}
+            </option>
+          ))}
+        </select>
 
-          <label className="mb-2 block text-sm font-medium text-slate-700">
-            Nome da Escola
-          </label>
-          <input
-            type="text"
-            value={schoolNameInput}
-            onChange={(event) => setSchoolNameInput(event.target.value)}
-            className="mb-4 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none ring-blue-600 transition focus:ring"
-            placeholder="Ex: Escola Municipal Aurora"
-          />
-
-          <label className="mb-2 block text-sm font-medium text-slate-700">
-            Lista de Alunos (um nome por linha)
-          </label>
-          <textarea
-            rows={10}
-            value={studentsText}
-            onChange={(event) => setStudentsText(event.target.value)}
-            className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none ring-blue-600 transition focus:ring"
-            placeholder={`Ana Souza\nBruno Lima\nCarla Mendes`}
-          />
-
-          <div className="mt-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-            <p className="text-sm text-slate-500">{status}</p>
-            <button
-              type="button"
-              onClick={handleSave}
-              className="no-print rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-medium text-white transition hover:bg-blue-700"
-            >
-              Salvar Info
-            </button>
-          </div>
-        </div>
-
-        <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
-          <div className="mb-4 flex items-center gap-2">
-            <Users className="h-5 w-5 text-blue-600" />
-            <h3 className="text-base font-semibold text-slate-900">Alunos</h3>
-          </div>
-
-          <div className="max-h-[460px] space-y-2 overflow-auto pr-1">
-            {normalizedStudents.length === 0 ? (
-              <p className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm text-slate-500">
-                Nenhum aluno listado. Adicione nomes na caixa ao lado.
-              </p>
-            ) : (
-              normalizedStudents.map((student) => (
-                <div
-                  key={student}
-                  className="flex items-center justify-between rounded-lg border border-slate-200 bg-slate-50 px-3 py-2"
-                >
-                  <span className="inline-flex items-center gap-2 text-sm font-medium text-slate-700">
-                    <User className="h-4 w-4 text-slate-500" />
-                    {student}
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => onOpenTemplate(student)}
-                    className="no-print rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-700"
-                  >
-                    Ver Gabarito Personalizado
-                  </button>
-                </div>
-              ))
-            )}
-          </div>
-        </div>
+        <select
+          value={selectedActivityId || ""}
+          onChange={(event) => onSelectActivity(event.target.value)}
+          className="rounded-lg border border-slate-600 bg-slate-800 px-3 py-2 text-xs text-slate-100"
+        >
+          <option value="">Atividade</option>
+          {(selectedClass?.activities || []).map((item) => (
+            <option key={item.id} value={item.id}>
+              {item.name}
+            </option>
+          ))}
+        </select>
       </div>
-    </section>
+    </div>
   );
 }
 
 const ScannerOverlay = memo(function ScannerOverlay({
   overlayCanvasRef,
   processingCanvasRef,
-  anchorFeedback,
   workerLoadError,
   workerLoading,
+  anchorReady,
+  captureStatus,
+  anchorMessage,
+  selectedClass,
+  selectedActivity,
 }) {
+  const indicators = [
+    { label: "Circulos Detectados", active: Boolean(anchorReady) || Boolean(captureStatus?.circlesDetected) },
+    { label: "QR Code Lido", active: Boolean(captureStatus?.qrRead) },
+    { label: "Atividade Identificada", active: Boolean(captureStatus?.activityIdentified) },
+  ];
+
   return (
     <div className="pointer-events-none absolute inset-0">
-      <div className="absolute inset-0 bg-slate-950/35" />
+      <div className="absolute inset-0 bg-slate-950/45" />
 
-      <div className="absolute inset-0 flex items-center justify-center px-2 py-3 sm:px-4 sm:py-4">
-        <div className="relative aspect-[210/297] w-[min(94vw,680px)] max-h-[84vh] overflow-hidden rounded-2xl border border-white/35 bg-slate-900/15 shadow-2xl backdrop-blur-[2px] sm:w-[min(90vw,620px)]">
-          <div className="absolute inset-0 bg-gradient-to-b from-blue-500/10 via-transparent to-blue-500/10" />
-
-          <div className="absolute left-[18%] top-[28%] h-[60%] w-[64%] rounded-xl border border-white/45 bg-blue-500/5">
-            <div className="absolute inset-x-2 top-1/2 h-px -translate-y-1/2 bg-blue-400/60 animate-pulse" />
-
-            <div className="absolute left-0 top-0 h-8 w-8">
-              <div className="absolute left-0 top-0 h-5 w-[2px] rounded bg-blue-500 shadow-[0_0_12px_rgba(59,130,246,0.9)]" />
-              <div className="absolute left-0 top-0 h-[2px] w-5 rounded bg-blue-500 shadow-[0_0_12px_rgba(59,130,246,0.9)]" />
-              <div className="absolute left-1.5 top-1.5 h-4 w-4 rounded-full border border-dashed border-white/70" />
-            </div>
-
-            <div className="absolute right-0 top-0 h-8 w-8">
-              <div className="absolute right-0 top-0 h-5 w-[2px] rounded bg-blue-500 shadow-[0_0_12px_rgba(59,130,246,0.9)]" />
-              <div className="absolute right-0 top-0 h-[2px] w-5 rounded bg-blue-500 shadow-[0_0_12px_rgba(59,130,246,0.9)]" />
-              <div className="absolute right-1.5 top-1.5 h-4 w-4 rounded-full border border-dashed border-white/70" />
-            </div>
-
-            <div className="absolute bottom-0 left-0 h-8 w-8">
-              <div className="absolute bottom-0 left-0 h-5 w-[2px] rounded bg-blue-500 shadow-[0_0_12px_rgba(59,130,246,0.9)]" />
-              <div className="absolute bottom-0 left-0 h-[2px] w-5 rounded bg-blue-500 shadow-[0_0_12px_rgba(59,130,246,0.9)]" />
-              <div className="absolute bottom-1.5 left-1.5 h-4 w-4 rounded-full border border-dashed border-white/70" />
-            </div>
-
-            <div className="absolute bottom-0 right-0 h-8 w-8">
-              <div className="absolute bottom-0 right-0 h-5 w-[2px] rounded bg-blue-500 shadow-[0_0_12px_rgba(59,130,246,0.9)]" />
-              <div className="absolute bottom-0 right-0 h-[2px] w-5 rounded bg-blue-500 shadow-[0_0_12px_rgba(59,130,246,0.9)]" />
-              <div className="absolute bottom-1.5 right-1.5 h-4 w-4 rounded-full border border-dashed border-white/70" />
-            </div>
-
-            <div className="absolute left-1/2 top-0 h-3 w-px -translate-x-1/2 bg-white/70" />
-            <div className="absolute bottom-0 left-1/2 h-3 w-px -translate-x-1/2 bg-white/70" />
-            <div className="absolute left-0 top-1/2 h-px w-3 -translate-y-1/2 bg-white/70" />
-            <div className="absolute right-0 top-1/2 h-px w-3 -translate-y-1/2 bg-white/70" />
-          </div>
-
-          <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 rounded-lg bg-slate-950/70 px-3 py-2 text-center text-[11px] font-semibold tracking-wide text-white/90">
-            ALINHE OS CÍRCULOS COM OS CANTOS DO PAPEL
-          </div>
-        </div>
-      </div>
-
-      <canvas
-        ref={overlayCanvasRef}
-        className="pointer-events-none absolute inset-0 h-full w-full"
-      />
+      <canvas ref={overlayCanvasRef} className="pointer-events-none absolute inset-0 h-full w-full" />
 
       <canvas ref={processingCanvasRef} className="hidden" />
 
-      <div className="absolute left-1/2 top-4 z-20 -translate-x-1/2">
-        <div
-          className={`rounded-full px-3 py-1 text-xs font-medium shadow-sm ${
-            anchorFeedback.ready
-              ? "bg-emerald-100 text-emerald-700"
-              : "bg-slate-100 text-slate-700"
-          }`}
-        >
-          {anchorFeedback.message}
+      <div className="absolute left-1/2 top-4 z-20 w-[min(94vw,950px)] -translate-x-1/2 rounded-xl border border-white/15 bg-slate-900/72 p-3 backdrop-blur-sm">
+        <div className="mb-2 flex items-center justify-between gap-3">
+          <p className="text-xs font-semibold tracking-wide text-white/90">LEITOR REAL AJUSTADO AO GABARITO</p>
+          <p className="text-[11px] text-blue-100/90">{selectedClass?.name || "Sem turma"} • {selectedActivity?.name || "Sem atividade"}</p>
+        </div>
+        <div className="mb-2 flex flex-wrap items-center gap-2">
+          {indicators.map((item) => (
+            <div
+              key={item.label}
+              className={`rounded-full px-3 py-1 text-[11px] font-medium shadow-sm ${
+                item.active ? "bg-emerald-100 text-emerald-700" : "bg-slate-100 text-slate-700"
+              }`}
+            >
+              {item.label}
+            </div>
+          ))}
+        </div>
+        <p className="text-xs text-white/85">{captureStatus?.message || anchorMessage || "Posicione a folha inteira dentro do quadro"}</p>
+      </div>
+
+      <div className="absolute left-1/2 top-1/2 z-20 -translate-x-1/2 -translate-y-1/2 rounded-lg border border-white/20 bg-slate-900/72 px-4 py-2 text-center backdrop-blur-sm">
+        <p className="text-[11px] font-semibold tracking-wide text-white/90">ALINHE OS 4 CIRCULOS DA FOLHA COM OS ALVOS DO QUADRO</p>
+      </div>
+
+      <div className="absolute bottom-6 left-1/2 z-20 w-[min(90vw,760px)] -translate-x-1/2 rounded-xl border border-white/15 bg-slate-900/70 p-3 backdrop-blur-sm">
+        <div className="grid grid-cols-3 gap-2 text-[11px] text-white/85">
+          <p className="rounded-lg bg-slate-800/70 px-2 py-1">1. Centralize os 4 cantos pretos</p>
+          <p className="rounded-lg bg-slate-800/70 px-2 py-1">2. Evite sombras sobre bolhas</p>
+          <p className="rounded-lg bg-slate-800/70 px-2 py-1">3. Capture com a folha estável</p>
         </div>
       </div>
 
       {workerLoading && (
         <div className="absolute left-1/2 top-12 z-20 -translate-x-1/2 rounded-full bg-blue-100 px-3 py-1 text-xs font-medium text-blue-700 shadow-sm">
-          Carregamento otimizado: preparando motor de visão...
+          Preparando motor de visao...
         </div>
       )}
 
@@ -383,7 +432,27 @@ const ScannerOverlay = memo(function ScannerOverlay({
   );
 });
 
-function ScannerView({ questionCount, onCapture }) {
+function ScannerView({
+  classes,
+  selectedClassId,
+  selectedActivityId,
+  onSelectClass,
+  onSelectActivity,
+  onCapture,
+}) {
+  const selectedClass = useMemo(
+    () => classes.find((item) => item.id === selectedClassId) || null,
+    [classes, selectedClassId],
+  );
+
+  const selectedActivity = useMemo(
+    () =>
+      selectedClass?.activities?.find((item) => item.id === selectedActivityId) || null,
+    [selectedClass, selectedActivityId],
+  );
+
+  const questionCount = selectedActivity?.questionCount || 20;
+
   const videoRef = useRef(null);
   const scanFrameRef = useRef(null);
   const streamRef = useRef(null);
@@ -391,8 +460,11 @@ function ScannerView({ questionCount, onCapture }) {
   const processingCanvasRef = useRef(null);
   const overlayCanvasRef = useRef(null);
   const pendingFrameRef = useRef(false);
-  const latestAnswersRef = useRef(null);
   const latestFrameSizeRef = useRef({ width: 1, height: 1 });
+  const captureResolverRef = useRef(null);
+  const autoCaptureTimerRef = useRef(null);
+  const autoCaptureLockRef = useRef(false);
+  const autoCaptureCooldownRef = useRef(0);
 
   const [isCameraActive, setIsCameraActive] = useState(false);
   const [cameraReady, setCameraReady] = useState(false);
@@ -402,9 +474,19 @@ function ScannerView({ questionCount, onCapture }) {
   const [workerLoadError, setWorkerLoadError] = useState("");
   const [anchorFeedback, setAnchorFeedback] = useState({
     ready: false,
-    message: "Aguardando câmera...",
+    message: "Aguardando camera...",
     points: [],
   });
+  const [captureStatus, setCaptureStatus] = useState({
+    circlesDetected: false,
+    qrRead: false,
+    activityIdentified: false,
+    message: "",
+  });
+  const [isCapturing, setIsCapturing] = useState(false);
+  const [autoCaptureMessage, setAutoCaptureMessage] = useState(
+    "Captura automatica aguardando alinhamento...",
+  );
 
   const drawOverlayFeedback = (points, frameSize) => {
     const canvas = overlayCanvasRef.current;
@@ -435,7 +517,46 @@ function ScannerView({ questionCount, onCapture }) {
     const guideW = fw * BUBBLE_GEOMETRY.infoW;
     const guideH = fh * BUBBLE_GEOMETRY.infoH;
 
+    const cornerRadius = Math.max(10, Math.round(Math.min(fw, fh) * 0.018));
+    const targetCorners = [
+      { x: fx + 16, y: fy + 16 },
+      { x: fx + fw - 16, y: fy + 16 },
+      { x: fx + fw - 16, y: fy + fh - 16 },
+      { x: fx + 16, y: fy + fh - 16 },
+    ];
+
     ctx.lineWidth = 2;
+    ctx.strokeStyle = "rgba(255,255,255,0.8)";
+    ctx.strokeRect(fx, fy, fw, fh);
+
+    targetCorners.forEach((point, idx) => {
+      ctx.fillStyle = "rgba(255,255,255,0.16)";
+      ctx.beginPath();
+      ctx.arc(point.x, point.y, cornerRadius + 4, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.lineWidth = 2;
+      ctx.strokeStyle = "rgba(255,255,255,0.95)";
+      ctx.beginPath();
+      ctx.arc(point.x, point.y, cornerRadius, 0, Math.PI * 2);
+      ctx.stroke();
+
+      ctx.lineWidth = 1;
+      ctx.strokeStyle = "rgba(255,255,255,0.65)";
+      ctx.beginPath();
+      ctx.moveTo(point.x - cornerRadius - 7, point.y);
+      ctx.lineTo(point.x + cornerRadius + 7, point.y);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(point.x, point.y - cornerRadius - 7);
+      ctx.lineTo(point.x, point.y + cornerRadius + 7);
+      ctx.stroke();
+
+      ctx.fillStyle = "rgba(255,255,255,0.95)";
+      ctx.font = "11px sans-serif";
+      ctx.fillText(`A${idx + 1}`, point.x + cornerRadius + 8, point.y - cornerRadius - 6);
+    });
+
     ctx.strokeStyle = "rgba(255,255,255,0.85)";
     ctx.strokeRect(guideX, guideY, guideW, guideH);
 
@@ -468,24 +589,40 @@ function ScannerView({ questionCount, onCapture }) {
 
       ctx.strokeStyle = "rgba(34,197,94,0.95)";
       ctx.fillStyle = "rgba(34,197,94,0.95)";
+      ctx.lineWidth = 2;
 
       points.forEach((point, idx) => {
         const px = fx + point.x * sx;
         const py = fy + point.y * sy;
+
+        const target = targetCorners[idx];
         ctx.beginPath();
-        ctx.arc(px, py, 6, 0, Math.PI * 2);
+        ctx.moveTo(px, py);
+        ctx.lineTo(target.x, target.y);
+        ctx.stroke();
+
+        ctx.beginPath();
+        ctx.arc(px, py, 7, 0, Math.PI * 2);
         ctx.fill();
+
+        ctx.strokeStyle = "rgba(255,255,255,0.95)";
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.arc(px, py, 11, 0, Math.PI * 2);
+        ctx.stroke();
+
+        ctx.strokeStyle = "rgba(34,197,94,0.95)";
+        ctx.lineWidth = 2;
         ctx.font = "12px sans-serif";
-        ctx.fillText(String(idx + 1), px + 8, py - 8);
+        ctx.fillText(`D${idx + 1}`, px + 10, py - 9);
       });
     }
   };
 
   useEffect(() => {
-    const worker = new Worker(
-      new URL("./workers/imageProcessor.worker.js", import.meta.url),
-      { type: "classic" },
-    );
+    const worker = new Worker(new URL("./workers/imageProcessor.worker.js", import.meta.url), {
+      type: "classic",
+    });
 
     workerRef.current = worker;
     setWorkerLoading(true);
@@ -514,7 +651,6 @@ function ScannerView({ questionCount, onCapture }) {
           height: payload.sourceHeight || 1,
         };
         drawOverlayFeedback(payload.anchors, latestFrameSizeRef.current);
-        latestAnswersRef.current = payload.answers;
         setAnchorFeedback({
           ready: payload.ready,
           message: payload.message,
@@ -530,6 +666,28 @@ function ScannerView({ questionCount, onCapture }) {
           message: message || "Erro de processamento",
           points: [],
         });
+        return;
+      }
+
+      if (type === "capture-result") {
+        if (captureResolverRef.current) {
+          captureResolverRef.current(payload);
+          captureResolverRef.current = null;
+        }
+        return;
+      }
+
+      if (type === "capture-error") {
+        if (captureResolverRef.current) {
+          captureResolverRef.current({
+            success: false,
+            message: message || "Erro ao processar captura",
+            circlesDetected: false,
+            qrRead: false,
+            activityIdentified: false,
+          });
+          captureResolverRef.current = null;
+        }
       }
     };
 
@@ -587,13 +745,13 @@ function ScannerView({ questionCount, onCapture }) {
         streamRef.current = null;
       }
     };
-  }, [isCameraActive, questionCount]);
+  }, [isCameraActive]);
 
   useEffect(() => {
     if (!isCameraActive || !cameraReady || !workerReady || cameraBlocked) return undefined;
 
     const maxProcessWidth = 960;
-    const tickMs = anchorFeedback.ready ? 900 : 380;
+    const tickMs = anchorFeedback.ready ? 900 : 360;
 
     const tick = window.setInterval(() => {
       if (document.hidden) return;
@@ -633,48 +791,212 @@ function ScannerView({ questionCount, onCapture }) {
     anchorFeedback.ready,
   ]);
 
-  const handleCapture = () => {
-    if (workerReady && anchorFeedback.ready && Array.isArray(latestAnswersRef.current)) {
-      onCapture(latestAnswersRef.current);
+  const handleCapture = async () => {
+    const video = videoRef.current;
+    const canvas = processingCanvasRef.current;
+    const worker = workerRef.current;
+    if (!video || !canvas || !worker || !workerReady || !selectedActivity || isCapturing) {
       return;
     }
 
-    setAnchorFeedback({
-      ready: false,
-      message: "Alinhar as âncoras para capturar.",
-      points: [],
+    if (!video.videoWidth || !video.videoHeight) return;
+
+    setIsCapturing(true);
+    setAutoCaptureMessage("Captura automatica em andamento...");
+
+    const maxProcessWidth = 1280;
+    const scale = Math.min(1, maxProcessWidth / video.videoWidth);
+    const frameWidth = Math.max(1, Math.floor(video.videoWidth * scale));
+    const frameHeight = Math.max(1, Math.floor(video.videoHeight * scale));
+
+    if (canvas.width !== frameWidth || canvas.height !== frameHeight) {
+      canvas.width = frameWidth;
+      canvas.height = frameHeight;
+    }
+
+    const ctx = canvas.getContext("2d", { willReadFrequently: true });
+    if (!ctx) {
+      setIsCapturing(false);
+      return;
+    }
+
+    ctx.drawImage(video, 0, 0, frameWidth, frameHeight);
+    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+
+    const payload = await new Promise((resolve) => {
+      captureResolverRef.current = resolve;
+      worker.postMessage({
+        type: "capture-frame",
+        payload: { imageData, questionCount: selectedActivity.questionCount },
+      });
     });
+
+    setIsCapturing(false);
+
+    setCaptureStatus({
+      circlesDetected: Boolean(payload?.circlesDetected),
+      qrRead: Boolean(payload?.qrRead),
+      activityIdentified: Boolean(payload?.activityIdentified),
+      message: payload?.message || "",
+    });
+
+    if (!payload?.success || !Array.isArray(payload?.answers)) {
+      autoCaptureLockRef.current = false;
+      autoCaptureCooldownRef.current = Date.now() + 1200;
+      setAutoCaptureMessage("Falha na captura automatica. Reposicione a folha.");
+      setAnchorFeedback((prev) => ({
+        ...prev,
+        ready: false,
+        message: payload?.message || "Falha na captura",
+      }));
+      return;
+    }
+
+    setAutoCaptureMessage("Leitura concluida automaticamente.");
+
+    onCapture(payload);
   };
+
+  useEffect(() => {
+    if (
+      !isCameraActive ||
+      !cameraReady ||
+      !workerReady ||
+      cameraBlocked ||
+      !selectedClass ||
+      !selectedActivity
+    ) {
+      if (autoCaptureTimerRef.current) {
+        window.clearTimeout(autoCaptureTimerRef.current);
+        autoCaptureTimerRef.current = null;
+      }
+      return;
+    }
+
+    if (isCapturing || autoCaptureLockRef.current) return;
+
+    if (!anchorFeedback.ready) {
+      setAutoCaptureMessage("Captura automatica aguardando alinhamento...");
+      if (autoCaptureTimerRef.current) {
+        window.clearTimeout(autoCaptureTimerRef.current);
+        autoCaptureTimerRef.current = null;
+      }
+      return;
+    }
+
+    if (Date.now() < autoCaptureCooldownRef.current) return;
+
+    setAutoCaptureMessage("Alinhamento detectado. Capturando automaticamente...");
+
+    if (autoCaptureTimerRef.current) {
+      window.clearTimeout(autoCaptureTimerRef.current);
+      autoCaptureTimerRef.current = null;
+    }
+
+    autoCaptureTimerRef.current = window.setTimeout(() => {
+      autoCaptureLockRef.current = true;
+      handleCapture();
+      autoCaptureTimerRef.current = null;
+    }, 700);
+
+    return () => {
+      if (autoCaptureTimerRef.current) {
+        window.clearTimeout(autoCaptureTimerRef.current);
+        autoCaptureTimerRef.current = null;
+      }
+    };
+  }, [
+    isCameraActive,
+    cameraReady,
+    workerReady,
+    cameraBlocked,
+    selectedClass,
+    selectedActivity,
+    anchorFeedback.ready,
+    isCapturing,
+  ]);
 
   if (!isCameraActive) {
     return (
       <section className="mx-auto flex h-[calc(100vh-4rem)] w-full max-w-7xl items-center px-4 sm:px-6">
-        <div className="w-full rounded-2xl border border-slate-200 bg-white p-8 text-center shadow-sm">
-          <div className="mx-auto mb-4 inline-flex rounded-full bg-blue-50 p-3 text-blue-600">
-            <Camera className="h-6 w-6" />
+        <div className="w-full rounded-2xl border border-slate-200 bg-white p-8 shadow-sm">
+          <div className="grid gap-4 lg:grid-cols-[1fr_auto] lg:items-end">
+            <div>
+              <div className="mx-auto mb-4 inline-flex rounded-full bg-blue-50 p-3 text-blue-600">
+                <Camera className="h-6 w-6" />
+              </div>
+              <h2 className="text-xl font-semibold text-slate-900">Scanner real de gabaritos</h2>
+              <p className="mt-2 max-w-lg text-sm text-slate-500">
+                Tela reconstruida para guiar o enquadramento da folha A4 e alinhar melhor
+                com o gabarito impresso. Selecione turma e atividade e inicie a leitura.
+              </p>
+            </div>
+
+            <button
+              type="button"
+              disabled={!selectedClass || !selectedActivity}
+              onClick={() => {
+                setCameraBlocked(false);
+                setCameraReady(false);
+                setAnchorFeedback({
+                  ready: false,
+                  message: "Iniciando leitura...",
+                  points: [],
+                });
+                setCaptureStatus({
+                  circlesDetected: false,
+                  qrRead: false,
+                  activityIdentified: false,
+                  message: "",
+                });
+                setAutoCaptureMessage("Captura automatica aguardando alinhamento...");
+                autoCaptureLockRef.current = false;
+                autoCaptureCooldownRef.current = 0;
+                if (autoCaptureTimerRef.current) {
+                  window.clearTimeout(autoCaptureTimerRef.current);
+                  autoCaptureTimerRef.current = null;
+                }
+                setIsCameraActive(true);
+              }}
+              className="rounded-xl bg-blue-600 px-5 py-3 text-sm font-medium text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              Iniciar Scanner
+            </button>
           </div>
-          <h2 className="text-xl font-semibold text-slate-900">Leitor de Respostas</h2>
-          <p className="mx-auto mt-2 max-w-lg text-sm text-slate-500">
-            Para iniciar a leitura, toque no botão abaixo e abra a câmera quando
-            quiser começar.
-          </p>
-          <button
-            type="button"
-            onClick={() => {
-              setCameraBlocked(false);
-              setCameraReady(false);
-              setAnchorFeedback({
-                ready: false,
-                message: "Iniciando leitura...",
-                points: [],
-              });
-              setIsCameraActive(true);
-            }}
-            className="mt-6 inline-flex items-center gap-2 rounded-xl bg-blue-600 px-5 py-3 text-sm font-medium text-white transition hover:bg-blue-700"
-          >
-            <Camera className="h-4 w-4" />
-            Ler Respostas
-          </button>
+
+          <div className="mt-5 grid gap-2 sm:grid-cols-2">
+            <select
+              value={selectedClassId || ""}
+              onChange={(event) => onSelectClass(event.target.value)}
+              className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm"
+            >
+              <option value="">Selecione a turma</option>
+              {classes.map((item) => (
+                <option key={item.id} value={item.id}>
+                  {item.name}
+                </option>
+              ))}
+            </select>
+
+            <select
+              value={selectedActivityId || ""}
+              onChange={(event) => onSelectActivity(event.target.value)}
+              className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm"
+            >
+              <option value="">Selecione a atividade</option>
+              {(selectedClass?.activities || []).map((item) => (
+                <option key={item.id} value={item.id}>
+                  {item.name}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div className="mt-4 grid gap-2 rounded-xl border border-slate-200 bg-slate-50 p-3 text-xs text-slate-600 sm:grid-cols-3">
+            <p>Use boa iluminacao e mantenha a camera paralela.</p>
+            <p>Posicione os 4 circulos pretos dentro do quadro.</p>
+            <p>A leitura de QR identifica aluno e atividade automaticamente.</p>
+          </div>
         </div>
       </section>
     );
@@ -682,44 +1004,49 @@ function ScannerView({ questionCount, onCapture }) {
 
   return (
     <section className="relative h-[calc(100vh-4rem)] w-full overflow-hidden bg-slate-900">
+      <div className="absolute left-1/2 top-24 z-30 w-[min(94vw,950px)] -translate-x-1/2">
+        <SelectionStrip
+          classes={classes}
+          selectedClassId={selectedClassId}
+          selectedActivityId={selectedActivityId}
+          onSelectClass={onSelectClass}
+          onSelectActivity={onSelectActivity}
+        />
+      </div>
+
       {!cameraBlocked ? (
         <>
           <div className="absolute inset-0 bg-slate-950/80" />
           <div className="absolute inset-0 flex items-center justify-center px-2 py-3 sm:px-4 sm:py-4">
             <div
               ref={scanFrameRef}
-              className="relative aspect-[210/297] w-[min(94vw,680px)] max-h-[84vh] overflow-hidden rounded-2xl border border-white/20 bg-slate-900 shadow-2xl sm:w-[min(90vw,620px)]"
+              className="relative aspect-[210/297] w-[min(94vw,720px)] max-h-[82vh] overflow-hidden rounded-2xl border border-white/25 bg-slate-900 shadow-2xl sm:w-[min(90vw,680px)]"
             >
-              <video
-                ref={videoRef}
-                className="h-full w-full object-cover"
-                autoPlay
-                playsInline
-                muted
-              />
+              <video ref={videoRef} className="h-full w-full object-cover" autoPlay playsInline muted />
+
+              <div className="pointer-events-none absolute left-4 top-4 h-6 w-6 rounded-full border-2 border-white/85 bg-white/20" />
+              <div className="pointer-events-none absolute right-4 top-4 h-6 w-6 rounded-full border-2 border-white/85 bg-white/20" />
+              <div className="pointer-events-none absolute bottom-4 left-4 h-6 w-6 rounded-full border-2 border-white/85 bg-white/20" />
+              <div className="pointer-events-none absolute bottom-4 right-4 h-6 w-6 rounded-full border-2 border-white/85 bg-white/20" />
             </div>
           </div>
 
           {!cameraReady && (
             <div className="absolute inset-0 grid place-items-center bg-slate-900/60">
-              <p className="text-sm font-medium text-white">Iniciando câmera...</p>
+              <p className="text-sm font-medium text-white">Iniciando camera...</p>
             </div>
           )}
         </>
       ) : (
         <div className="relative h-full w-full overflow-hidden bg-slate-200">
           <div className="absolute inset-0 bg-[radial-gradient(circle_at_20%_20%,rgba(255,255,255,0.78),transparent_38%),radial-gradient(circle_at_80%_30%,rgba(255,255,255,0.42),transparent_34%),radial-gradient(circle_at_60%_80%,rgba(148,163,184,0.35),transparent_44%)]" />
-          <div className="absolute inset-0 bg-[linear-gradient(135deg,rgba(255,255,255,0.13)_25%,transparent_25%,transparent_50%,rgba(255,255,255,0.13)_50%,rgba(255,255,255,0.13)_75%,transparent_75%,transparent)] bg-[length:24px_24px] opacity-40" />
           <div className="relative flex h-full flex-col items-center justify-center px-8 text-center">
             <div className="rounded-full bg-white p-4 shadow-md">
               <Camera className="h-7 w-7 text-slate-500" />
             </div>
-            <h2 className="mt-4 text-lg font-semibold text-slate-900">
-              Câmera Simulada
-            </h2>
+            <h2 className="mt-4 text-lg font-semibold text-slate-900">Camera bloqueada</h2>
             <p className="mt-2 max-w-sm text-sm text-slate-600">
-              O navegador bloqueou a câmera traseira. A leitura continua com
-              fallback.
+              O navegador bloqueou a camera traseira. Libere a permissao e tente novamente.
             </p>
           </div>
         </div>
@@ -728,27 +1055,40 @@ function ScannerView({ questionCount, onCapture }) {
       <ScannerOverlay
         overlayCanvasRef={overlayCanvasRef}
         processingCanvasRef={processingCanvasRef}
-        anchorFeedback={anchorFeedback}
+        anchorReady={anchorFeedback.ready}
+        captureStatus={captureStatus}
+        anchorMessage={anchorFeedback.message}
+        selectedClass={selectedClass}
+        selectedActivity={selectedActivity}
         workerLoadError={workerLoadError}
         workerLoading={workerLoading}
       />
 
-      <div className="no-print absolute inset-x-0 bottom-0 flex justify-center pb-7 pt-6">
+      <div className="no-print absolute inset-x-0 bottom-0 z-30 flex justify-center pb-7 pt-6">
         <div className="flex flex-col items-center gap-2">
+          <div className="rounded-xl border border-white/15 bg-slate-900/80 px-4 py-2 text-center backdrop-blur-sm">
+            <p className="text-xs font-semibold text-white/90">CAPTURA AUTOMATICA ATIVA</p>
+            <p className="mt-1 text-xs text-white/75">{autoCaptureMessage}</p>
+          </div>
+
           <button
             type="button"
             onClick={handleCapture}
-            disabled={!anchorFeedback.ready && workerReady}
-            className="group relative inline-flex h-24 w-24 items-center justify-center rounded-full bg-white shadow-xl ring-8 ring-white/20 transition active:scale-95 disabled:cursor-not-allowed disabled:opacity-60"
-            aria-label="Capturar gabarito"
+            disabled={!selectedClass || !selectedActivity || !workerReady || isCapturing}
+            className="rounded-lg bg-white/95 px-3 py-1.5 text-xs font-medium text-slate-700 transition hover:bg-white disabled:cursor-not-allowed disabled:opacity-60"
           >
-            <span className="absolute h-20 w-20 rounded-full border-4 border-blue-600" />
-            <span className="h-5 w-5 rounded-full bg-blue-600 transition group-active:scale-125" />
+            Capturar agora (manual)
           </button>
 
           {!workerReady && (
             <p className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-700">
               OpenCV em carregamento. Aguarde para capturar.
+            </p>
+          )}
+
+          {workerReady && (
+            <p className="rounded-lg bg-white/90 px-3 py-1.5 text-xs font-medium text-slate-700">
+              O leitor captura sozinho quando os 4 alvos estiverem alinhados.
             </p>
           )}
         </div>
@@ -757,22 +1097,138 @@ function ScannerView({ questionCount, onCapture }) {
   );
 }
 
-const TemplateView = memo(function TemplateView({
-  examConfig,
-  schoolName,
-  studentName,
-  onBack,
+function TemplatesHubView({
+  schoolInfo,
+  classes,
+  selectedClassId,
+  selectedActivityId,
+  onSchoolNameChange,
+  onSelectClass,
+  onSelectActivity,
+  onOpenTemplate,
 }) {
-  const questions = Array.from({ length: examConfig.questionCount }, (_, i) => i + 1);
+  const selectedClass = classes.find((item) => item.id === selectedClassId) || null;
+
+  return (
+    <section className="mx-auto w-full max-w-7xl px-4 pb-12 pt-6 sm:px-6">
+      <div className="grid gap-4 lg:grid-cols-[1.1fr_1fr]">
+        <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
+          <div className="mb-4 flex items-center gap-2">
+            <School className="h-5 w-5 text-blue-600" />
+            <h2 className="text-base font-semibold text-slate-900">Template A4 com QR e Ancoras</h2>
+          </div>
+
+          <label className="mb-2 block text-sm font-medium text-slate-700">Nome da Escola</label>
+          <input
+            type="text"
+            value={schoolInfo?.name || ""}
+            onChange={(event) => onSchoolNameChange(event.target.value)}
+            className="mb-4 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900"
+            placeholder="Ex: Escola Municipal Aurora"
+          />
+
+          <div className="grid gap-2 sm:grid-cols-2">
+            <select
+              value={selectedClassId || ""}
+              onChange={(event) => onSelectClass(event.target.value)}
+              className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm"
+            >
+              <option value="">Selecione a turma</option>
+              {classes.map((item) => (
+                <option key={item.id} value={item.id}>
+                  {item.name}
+                </option>
+              ))}
+            </select>
+
+            <select
+              value={selectedActivityId || ""}
+              onChange={(event) => onSelectActivity(event.target.value)}
+              className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm"
+            >
+              <option value="">Selecione a atividade</option>
+              {(selectedClass?.activities || []).map((item) => (
+                <option key={item.id} value={item.id}>
+                  {item.name}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <p className="mt-3 text-sm text-slate-500">
+            Cada folha gera QR unico contendo turma, atividade e aluno.
+          </p>
+        </div>
+
+        <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
+          <div className="mb-4 flex items-center gap-2">
+            <Users className="h-5 w-5 text-blue-600" />
+            <h3 className="text-base font-semibold text-slate-900">Alunos da Turma</h3>
+          </div>
+
+          <div className="max-h-[460px] space-y-2 overflow-auto pr-1">
+            {(selectedClass?.students || []).length === 0 ? (
+              <p className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm text-slate-500">
+                Nenhum aluno cadastrado nesta turma.
+              </p>
+            ) : (
+              selectedClass.students.map((student) => (
+                <div
+                  key={student.id}
+                  className="flex items-center justify-between rounded-lg border border-slate-200 bg-slate-50 px-3 py-2"
+                >
+                  <span className="inline-flex items-center gap-2 text-sm font-medium text-slate-700">
+                    <User className="h-4 w-4 text-slate-500" />
+                    {student.name}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => onOpenTemplate(student.id)}
+                    disabled={!selectedActivityId}
+                    className="no-print rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    Gerar Folha
+                  </button>
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+const TemplateView = memo(function TemplateView({ schoolName, classroom, activity, student, onBack }) {
+  const [qrDataUrl, setQrDataUrl] = useState("");
+
+  const questions = Array.from({ length: activity.questionCount }, (_, i) => i + 1);
   const questionsPerColumn = Math.ceil(questions.length / 2);
   const leftColumnQuestions = questions.slice(0, questionsPerColumn);
   const rightColumnQuestions = questions.slice(questionsPerColumn);
+
+  useEffect(() => {
+    const payload = JSON.stringify({
+      v: 1,
+      classId: classroom.id,
+      activityId: activity.id,
+      studentId: student.id,
+    });
+
+    QRCode.toDataURL(payload, {
+      margin: 0,
+      width: 160,
+      errorCorrectionLevel: "M",
+    })
+      .then((url) => setQrDataUrl(url))
+      .catch(() => setQrDataUrl(""));
+  }, [classroom.id, activity.id, student.id]);
 
   return (
     <section className="mx-auto w-full max-w-7xl px-3 pb-12 pt-4 sm:px-6">
       <div className="no-print mb-3 flex flex-wrap items-center justify-between gap-2">
         <div className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-blue-700">
-          Dica: se a impressão automática estiver bloqueada, use Ctrl+P.
+          QR integrado para identificacao automatica de turma/atividade/aluno.
         </div>
         <div className="flex gap-2">
           <button
@@ -794,53 +1250,40 @@ const TemplateView = memo(function TemplateView({
 
       <div className="overflow-x-auto rounded-2xl border border-slate-200 bg-slate-100 p-3 sm:p-6">
         <div className="print-area relative mx-auto min-h-[297mm] w-[210mm] bg-white p-6 text-slate-900 shadow-md">
-          <div className="pointer-events-none absolute inset-3 rounded-xl border border-slate-300">
-            <div className="absolute left-2 top-2 h-8 w-8">
-              <div className="absolute left-0 top-0 h-5 w-[2px] bg-blue-600" />
-              <div className="absolute left-0 top-0 h-[2px] w-5 bg-blue-600" />
-              <div className="absolute left-1.5 top-1.5 h-4 w-4 rounded-full border border-dashed border-slate-500" />
+          <div className="pointer-events-none absolute inset-3 rounded-xl border border-slate-300" />
+
+          <div className="absolute left-3 top-3 h-5 w-5 rounded-full bg-black" />
+          <div className="absolute right-3 top-3 h-5 w-5 rounded-full bg-black" />
+          <div className="absolute bottom-3 left-3 h-5 w-5 rounded-full bg-black" />
+          <div className="absolute bottom-3 right-3 h-5 w-5 rounded-full bg-black" />
+
+          <div className="flex items-start justify-between border-b border-slate-200 pb-4">
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+                {schoolName || "Escola nao informada"}
+              </p>
+              <h2 className="mt-1 text-lg font-bold">Gabarito de Respostas</h2>
+              <p className="mt-1 text-sm text-slate-500">{classroom.name} • {activity.name}</p>
+              <p className="mt-1 text-sm text-slate-500">
+                Marque apenas uma alternativa por questao usando caneta escura.
+              </p>
             </div>
-
-            <div className="absolute right-2 top-2 h-8 w-8">
-              <div className="absolute right-0 top-0 h-5 w-[2px] bg-blue-600" />
-              <div className="absolute right-0 top-0 h-[2px] w-5 bg-blue-600" />
-              <div className="absolute right-1.5 top-1.5 h-4 w-4 rounded-full border border-dashed border-slate-500" />
+            <div className="rounded-lg border border-slate-300 bg-white p-2">
+              {qrDataUrl ? (
+                <img src={qrDataUrl} alt="QR de identificacao" className="h-20 w-20" />
+              ) : (
+                <div className="grid h-20 w-20 place-items-center text-[10px] text-slate-400">
+                  Gerando QR...
+                </div>
+              )}
             </div>
-
-            <div className="absolute bottom-2 left-2 h-8 w-8">
-              <div className="absolute bottom-0 left-0 h-5 w-[2px] bg-blue-600" />
-              <div className="absolute bottom-0 left-0 h-[2px] w-5 bg-blue-600" />
-              <div className="absolute bottom-1.5 left-1.5 h-4 w-4 rounded-full border border-dashed border-slate-500" />
-            </div>
-
-            <div className="absolute bottom-2 right-2 h-8 w-8">
-              <div className="absolute bottom-0 right-0 h-5 w-[2px] bg-blue-600" />
-              <div className="absolute bottom-0 right-0 h-[2px] w-5 bg-blue-600" />
-              <div className="absolute bottom-1.5 right-1.5 h-4 w-4 rounded-full border border-dashed border-slate-500" />
-            </div>
-
-            <div className="absolute left-1/2 top-0 h-3 w-px -translate-x-1/2 bg-slate-400" />
-            <div className="absolute bottom-0 left-1/2 h-3 w-px -translate-x-1/2 bg-slate-400" />
-            <div className="absolute left-0 top-1/2 h-px w-3 -translate-y-1/2 bg-slate-400" />
-            <div className="absolute right-0 top-1/2 h-px w-3 -translate-y-1/2 bg-slate-400" />
-          </div>
-
-          <div className="border-b border-slate-200 pb-4">
-            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
-              {schoolName || "Escola não informada"}
-            </p>
-            <h2 className="mt-1 text-lg font-bold">Gabarito de Respostas</h2>
-            <p className="mt-1 text-sm text-slate-500">
-              Preencha as bolhas com caneta escura. Marque apenas uma
-              alternativa por questão.
-            </p>
           </div>
 
           <div className="mt-4 grid grid-cols-2 gap-4 text-sm">
             <div className="space-y-1">
               <p className="text-slate-500">Aluno</p>
               <div className="rounded border border-slate-300 px-3 py-2 font-medium text-slate-900">
-                {studentName || "Aluno não selecionado"}
+                {student.name}
               </div>
             </div>
             <div className="space-y-1">
@@ -851,16 +1294,11 @@ const TemplateView = memo(function TemplateView({
             </div>
           </div>
 
-          <div className="relative mt-6 rounded-xl border border-slate-300 p-3">
-            <div className="pointer-events-none absolute left-2 top-2 h-6 w-6 border-l-2 border-t-2 border-blue-600" />
-            <div className="pointer-events-none absolute right-2 top-2 h-6 w-6 border-r-2 border-t-2 border-blue-600" />
-            <div className="pointer-events-none absolute bottom-2 left-2 h-6 w-6 border-b-2 border-l-2 border-blue-600" />
-            <div className="pointer-events-none absolute bottom-2 right-2 h-6 w-6 border-b-2 border-r-2 border-blue-600" />
-
+          <div className="relative mx-auto mt-6 w-[86%] rounded-xl border border-slate-300 p-3">
             <div className="grid grid-cols-2 gap-x-8 text-xs">
               <div className="space-y-3">
                 {leftColumnQuestions.map((q) => (
-                  <div key={q} className="flex items-center gap-2">
+                  <div key={q} className="flex items-center justify-center gap-2">
                     <span className="w-8 font-semibold text-slate-600">Q{q}</span>
                     <div className="flex gap-2">
                       {OPTIONS.map((op) => (
@@ -876,7 +1314,7 @@ const TemplateView = memo(function TemplateView({
 
               <div className="space-y-3">
                 {rightColumnQuestions.map((q) => (
-                  <div key={q} className="flex items-center gap-2">
+                  <div key={q} className="flex items-center justify-center gap-2">
                     <span className="w-8 font-semibold text-slate-600">Q{q}</span>
                     <div className="flex gap-2">
                       {OPTIONS.map((op) => (
@@ -905,18 +1343,20 @@ function ResultView({ result, onBackScanner, onOpenDashboard }) {
           <CheckCircle2 className="h-7 w-7 text-emerald-600" />
         </div>
 
-        <h2 className="text-center text-xl font-semibold text-slate-900">
-          Correção concluída
-        </h2>
+        <h2 className="text-center text-xl font-semibold text-slate-900">Correcao concluida</h2>
         <p className="mt-1 text-center text-sm text-slate-500">
-          Prova simulada corrigida com base no gabarito oficial.
+          Aluno e atividade identificados pelo QR (ou selecao manual de fallback).
         </p>
 
         <div className="mt-6 rounded-xl border border-slate-200 bg-slate-50 p-4">
           <div className="flex items-center justify-between">
             <span className="text-sm text-slate-500">Aluno</span>
+            <span className="text-sm font-medium text-slate-900">{result.studentName}</span>
+          </div>
+          <div className="mt-3 flex items-center justify-between">
+            <span className="text-sm text-slate-500">Turma / Atividade</span>
             <span className="text-sm font-medium text-slate-900">
-              {result.studentName}
+              {result.className} • {result.activityName}
             </span>
           </div>
           <div className="mt-3 flex items-center justify-between">
@@ -926,10 +1366,8 @@ function ResultView({ result, onBackScanner, onOpenDashboard }) {
             </span>
           </div>
           <div className="mt-3 flex items-end justify-between">
-            <span className="text-sm text-slate-500">Nota final</span>
-            <span className="text-3xl font-bold text-blue-600">
-              {Number(result.score).toFixed(1)}
-            </span>
+            <span className="text-sm text-slate-500">Nota</span>
+            <span className="text-3xl font-bold text-blue-600">{Number(result.score).toFixed(1)}</span>
           </div>
         </div>
 
@@ -956,61 +1394,313 @@ function ResultView({ result, onBackScanner, onOpenDashboard }) {
 
 export default function App() {
   const [activeView, setActiveView] = useState("scanner");
-  const [selectedStudent, setSelectedStudent] = useState("");
+  const [selectedTemplateStudentId, setSelectedTemplateStudentId] = useState("");
   const [lastResult, setLastResult] = useState(null);
 
-  const [schoolInfo, setSchoolInfo] = useLocalStorage(STORAGE_KEYS.schoolInfo, {
-    name: "",
-  });
-  const [studentList, setStudentList] = useLocalStorage(
-    STORAGE_KEYS.studentList,
-    [],
-  );
-  const [examConfig, setExamConfig] = useLocalStorage(STORAGE_KEYS.officialKey, {
-    questionCount: 20,
-    answers: Array.from({ length: 20 }, (_, idx) => OPTIONS[idx % OPTIONS.length]),
-  });
-  const [studentsResults, setStudentsResults] = useLocalStorage(
-    STORAGE_KEYS.studentsResults,
-    [],
-  );
+  const [appData, setAppData] = useLocalStorage(STORAGE_KEYS.v2Data, null);
 
   useEffect(() => {
-    const count = Math.max(1, Number(examConfig.questionCount) || 1);
-    if (!Array.isArray(examConfig.answers) || examConfig.answers.length !== count) {
-      const fixedAnswers = Array.from(
-        { length: count },
-        (_, i) => examConfig.answers?.[i] || "A",
-      );
-      setExamConfig({ questionCount: count, answers: fixedAnswers });
-    }
-  }, [examConfig, setExamConfig]);
+    if (appData !== null) return;
+    setAppData(migrateLegacyData());
+  }, [appData, setAppData]);
 
-  const handleCapture = (capturedAnswers) => {
-    const totalQuestions = examConfig.questionCount;
-    const official = examConfig.answers.slice(0, totalQuestions);
-    if (!Array.isArray(capturedAnswers) || capturedAnswers.length !== totalQuestions) {
+  const normalizedData = useMemo(
+    () => normalizeAppData(appData || migrateLegacyData()),
+    [appData],
+  );
+
+  const classes = normalizedData.classes;
+  const selectedClass = classes.find((item) => item.id === normalizedData.selectedClassId) || classes[0];
+  const selectedActivity =
+    selectedClass?.activities?.find((item) => item.id === normalizedData.selectedActivityId) ||
+    selectedClass?.activities?.[0] ||
+    null;
+  const selectedTemplateStudent =
+    selectedClass?.students?.find((item) => item.id === selectedTemplateStudentId) || null;
+
+  const setSelection = (nextClassId, nextActivityId = null) => {
+    setAppData((prev) => {
+      const current = normalizeAppData(prev || normalizedData);
+      const nextClass = current.classes.find((item) => item.id === nextClassId) || current.classes[0];
+      const candidateActivity =
+        nextClass.activities.find((item) => item.id === nextActivityId) || nextClass.activities[0];
+
+      return {
+        ...current,
+        selectedClassId: nextClass.id,
+        selectedActivityId: candidateActivity.id,
+      };
+    });
+  };
+
+  const updateSchoolName = (name) => {
+    setAppData((prev) => {
+      const current = normalizeAppData(prev || normalizedData);
+      return {
+        ...current,
+        schoolInfo: { name },
+      };
+    });
+  };
+
+  const createClass = (name) => {
+    const created = {
+      id: createId("class"),
+      name,
+      students: [],
+      activities: [createDefaultActivity("Atividade 1")],
+    };
+
+    setAppData((prev) => {
+      const current = normalizeAppData(prev || normalizedData);
+      return {
+        ...current,
+        classes: [...current.classes, created],
+        selectedClassId: created.id,
+        selectedActivityId: created.activities[0].id,
+      };
+    });
+
+    return created;
+  };
+
+  const createActivity = (classId, name) => {
+    const created = {
+      id: createId("activity"),
+      name,
+      questionCount: 20,
+      weight: 1,
+      officialKey: Array.from({ length: 20 }, () => "A"),
+      results: [],
+    };
+
+    setAppData((prev) => {
+      const current = normalizeAppData(prev || normalizedData);
+      return {
+        ...current,
+        classes: current.classes.map((classroom) => {
+          if (classroom.id !== classId) return classroom;
+          return {
+            ...classroom,
+            activities: [...classroom.activities, created],
+          };
+        }),
+        selectedClassId: classId,
+        selectedActivityId: created.id,
+      };
+    });
+
+    return created;
+  };
+
+  const renameClass = (classId, nextName) => {
+    const trimmed = String(nextName || "").trim();
+    if (!trimmed) return false;
+
+    setAppData((prev) => {
+      const current = normalizeAppData(prev || normalizedData);
+      return {
+        ...current,
+        classes: current.classes.map((classroom) =>
+          classroom.id === classId ? { ...classroom, name: trimmed } : classroom,
+        ),
+      };
+    });
+
+    return true;
+  };
+
+  const deleteClass = (classId) => {
+    const current = normalizeAppData(appData || normalizedData);
+    if (current.classes.length <= 1) return false;
+
+    const remaining = current.classes.filter((item) => item.id !== classId);
+    const nextClass = remaining[0];
+    const nextActivity = nextClass.activities[0];
+
+    setAppData({
+      ...current,
+      classes: remaining,
+      selectedClassId: nextClass.id,
+      selectedActivityId: nextActivity.id,
+    });
+
+    return true;
+  };
+
+  const renameActivity = (classId, activityId, nextName) => {
+    const trimmed = String(nextName || "").trim();
+    if (!trimmed) return false;
+
+    setAppData((prev) => {
+      const current = normalizeAppData(prev || normalizedData);
+      return {
+        ...current,
+        classes: current.classes.map((classroom) => {
+          if (classroom.id !== classId) return classroom;
+          return {
+            ...classroom,
+            activities: classroom.activities.map((activity) =>
+              activity.id === activityId ? { ...activity, name: trimmed } : activity,
+            ),
+          };
+        }),
+      };
+    });
+
+    return true;
+  };
+
+  const deleteActivity = (classId, activityId) => {
+    const current = normalizeAppData(appData || normalizedData);
+    const classroom = current.classes.find((item) => item.id === classId);
+    if (!classroom || classroom.activities.length <= 1) return false;
+
+    const nextClasses = current.classes.map((item) => {
+      if (item.id !== classId) return item;
+      return {
+        ...item,
+        activities: item.activities.filter((activity) => activity.id !== activityId),
+      };
+    });
+
+    const nextClassroom = nextClasses.find((item) => item.id === classId) || nextClasses[0];
+    const nextActivity = nextClassroom.activities[0];
+
+    setAppData({
+      ...current,
+      classes: nextClasses,
+      selectedClassId: nextClassroom.id,
+      selectedActivityId: nextActivity.id,
+    });
+
+    return true;
+  };
+
+  const saveClassStudents = (classId, studentNames) => {
+    const students = studentNames.map((name) => ({ id: createId("student"), name }));
+
+    setAppData((prev) => {
+      const current = normalizeAppData(prev || normalizedData);
+      return {
+        ...current,
+        classes: current.classes.map((classroom) =>
+          classroom.id === classId ? { ...classroom, students } : classroom,
+        ),
+      };
+    });
+  };
+
+  const saveActivityConfig = (classId, activityId, config) => {
+    setAppData((prev) => {
+      const current = normalizeAppData(prev || normalizedData);
+      return {
+        ...current,
+        classes: current.classes.map((classroom) => {
+          if (classroom.id !== classId) return classroom;
+          return {
+            ...classroom,
+            activities: classroom.activities.map((activity) => {
+              if (activity.id !== activityId) return activity;
+              const count = Math.max(1, Number(config.questionCount) || 1);
+              const key = Array.from(
+                { length: count },
+                (_, idx) => config?.officialKey?.[idx] || "A",
+              );
+              return {
+                ...activity,
+                questionCount: count,
+                weight: Number(config.weight || 1) > 0 ? Number(config.weight) : 1,
+                officialKey: key,
+              };
+            }),
+          };
+        }),
+      };
+    });
+  };
+
+  const handleScannerCapture = (capturePayload) => {
+    const idsFromQr = capturePayload?.qrPayload || {};
+
+    let classForResult = selectedClass;
+    if (idsFromQr.classId) {
+      const byQrClass = classes.find((item) => item.id === idsFromQr.classId);
+      if (byQrClass) classForResult = byQrClass;
+    }
+
+    let activityForResult = selectedActivity;
+    if (classForResult && idsFromQr.activityId) {
+      const byQrActivity = classForResult.activities.find(
+        (item) => item.id === idsFromQr.activityId,
+      );
+      if (byQrActivity) activityForResult = byQrActivity;
+    }
+
+    if (!classForResult || !activityForResult) {
       return;
     }
 
-    const studentAnswers = capturedAnswers;
+    let student = classForResult.students[0] || null;
+    if (idsFromQr.studentId) {
+      const byQrStudent = classForResult.students.find((item) => item.id === idsFromQr.studentId);
+      if (byQrStudent) student = byQrStudent;
+    }
+
+    const official = activityForResult.officialKey.slice(0, activityForResult.questionCount);
+    const studentAnswers = capturePayload.answers.slice(0, activityForResult.questionCount);
+
     const correctCount = studentAnswers.reduce(
       (acc, answer, idx) => (answer === official[idx] ? acc + 1 : acc),
       0,
     );
-    const score = totalQuestions > 0 ? (correctCount / totalQuestions) * 10 : 0;
+
+    const rawScore =
+      activityForResult.questionCount > 0
+        ? (correctCount / activityForResult.questionCount) * 10
+        : 0;
+
+    const weightedScore = rawScore * Number(activityForResult.weight || 1);
 
     const result = {
       id: Date.now(),
-      studentName: randomStudentName(),
+      classId: classForResult.id,
+      className: classForResult.name,
+      activityId: activityForResult.id,
+      activityName: activityForResult.name,
+      studentId: student?.id || null,
+      studentName: student?.name || "Aluno nao identificado",
       studentAnswers,
       correctCount,
-      totalQuestions,
-      score: Number(score.toFixed(1)),
+      totalQuestions: activityForResult.questionCount,
+      score: Number(rawScore.toFixed(1)),
+      weightedScore: Number(weightedScore.toFixed(2)),
       createdAt: new Date().toISOString(),
+      qrData: capturePayload?.qrData || null,
     };
 
-    setStudentsResults((prev) => [result, ...prev]);
+    setAppData((prev) => {
+      const current = normalizeAppData(prev || normalizedData);
+      return {
+        ...current,
+        selectedClassId: classForResult.id,
+        selectedActivityId: activityForResult.id,
+        classes: current.classes.map((classroom) => {
+          if (classroom.id !== classForResult.id) return classroom;
+          return {
+            ...classroom,
+            activities: classroom.activities.map((activity) => {
+              if (activity.id !== activityForResult.id) return activity;
+              return {
+                ...activity,
+                results: [result, ...(activity.results || [])],
+              };
+            }),
+          };
+        }),
+      };
+    });
+
     setLastResult(result);
     setActiveView("result");
   };
@@ -1018,10 +1708,7 @@ export default function App() {
   const handleExportBackup = () => {
     const payload = {
       exportedAt: new Date().toISOString(),
-      [STORAGE_KEYS.schoolInfo]: schoolInfo,
-      [STORAGE_KEYS.studentList]: studentList,
-      [STORAGE_KEYS.officialKey]: examConfig,
-      [STORAGE_KEYS.studentsResults]: studentsResults,
+      [STORAGE_KEYS.v2Data]: normalizedData,
     };
 
     const json = JSON.stringify(payload, null, 2);
@@ -1036,14 +1723,28 @@ export default function App() {
     URL.revokeObjectURL(url);
   };
 
-  const handleClearClass = () => {
-    window.localStorage.removeItem(STORAGE_KEYS.studentsResults);
-    setStudentsResults([]);
+  const handleClearActivityResults = () => {
+    if (!selectedClass || !selectedActivity) return;
+    setAppData((prev) => {
+      const current = normalizeAppData(prev || normalizedData);
+      return {
+        ...current,
+        classes: current.classes.map((classroom) => {
+          if (classroom.id !== selectedClass.id) return classroom;
+          return {
+            ...classroom,
+            activities: classroom.activities.map((activity) =>
+              activity.id === selectedActivity.id ? { ...activity, results: [] } : activity,
+            ),
+          };
+        }),
+      };
+    });
   };
 
-  const openTemplateForStudent = (studentName) => {
-    setSelectedStudent(studentName);
-    setActiveView("template");
+  const openTemplateForStudent = (studentId) => {
+    setSelectedTemplateStudentId(studentId);
+    setActiveView("template-print");
   };
 
   const renderView = () => {
@@ -1053,35 +1754,74 @@ export default function App() {
           fallback={
             <section className="mx-auto w-full max-w-7xl px-4 pb-12 pt-6 sm:px-6">
               <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-                <p className="text-sm text-slate-500">Carregando configuração...</p>
+                <p className="text-sm text-slate-500">Carregando configuracao...</p>
               </div>
             </section>
           }
         >
-          <LazyConfigGabaritoView examConfig={examConfig} onSave={setExamConfig} />
+          <LazyConfigGabaritoView
+            classes={classes}
+            selectedClassId={normalizedData.selectedClassId}
+            selectedActivityId={normalizedData.selectedActivityId}
+            onSelectClass={(classId) => setSelection(classId)}
+            onSelectActivity={(activityId) =>
+              setSelection(normalizedData.selectedClassId, activityId)
+            }
+            onCreateClass={createClass}
+            onCreateActivity={createActivity}
+            onRenameClass={renameClass}
+            onDeleteClass={deleteClass}
+            onRenameActivity={renameActivity}
+            onDeleteActivity={deleteActivity}
+            onSaveClassStudents={saveClassStudents}
+            onSaveActivityConfig={saveActivityConfig}
+          />
         </Suspense>
-      );
-    }
-
-    if (activeView === "customize") {
-      return (
-        <CustomizePrintView
-          schoolInfo={schoolInfo}
-          studentList={studentList}
-          onSaveSchool={setSchoolInfo}
-          onSaveStudents={setStudentList}
-          onOpenTemplate={openTemplateForStudent}
-        />
       );
     }
 
     if (activeView === "template") {
       return (
+        <TemplatesHubView
+          schoolInfo={normalizedData.schoolInfo}
+          classes={classes}
+          selectedClassId={normalizedData.selectedClassId}
+          selectedActivityId={normalizedData.selectedActivityId}
+          onSchoolNameChange={updateSchoolName}
+          onSelectClass={(classId) => setSelection(classId)}
+          onSelectActivity={(activityId) =>
+            setSelection(normalizedData.selectedClassId, activityId)
+          }
+          onOpenTemplate={openTemplateForStudent}
+        />
+      );
+    }
+
+    if (activeView === "template-print") {
+      if (!selectedClass || !selectedActivity || !selectedTemplateStudent) {
+        return (
+          <TemplatesHubView
+            schoolInfo={normalizedData.schoolInfo}
+            classes={classes}
+            selectedClassId={normalizedData.selectedClassId}
+            selectedActivityId={normalizedData.selectedActivityId}
+            onSchoolNameChange={updateSchoolName}
+            onSelectClass={(classId) => setSelection(classId)}
+            onSelectActivity={(activityId) =>
+              setSelection(normalizedData.selectedClassId, activityId)
+            }
+            onOpenTemplate={openTemplateForStudent}
+          />
+        );
+      }
+
+      return (
         <TemplateView
-          examConfig={examConfig}
-          schoolName={schoolInfo?.name || ""}
-          studentName={selectedStudent}
-          onBack={() => setActiveView("customize")}
+          schoolName={normalizedData.schoolInfo?.name || ""}
+          classroom={selectedClass}
+          activity={selectedActivity}
+          student={selectedTemplateStudent}
+          onBack={() => setActiveView("template")}
         />
       );
     }
@@ -1098,25 +1838,37 @@ export default function App() {
           }
         >
           <LazyDashboardView
-            examConfig={examConfig}
-            results={studentsResults}
+            classes={classes}
+            selectedClassId={normalizedData.selectedClassId}
+            selectedActivityId={normalizedData.selectedActivityId}
+            onSelectClass={(classId) => setSelection(classId)}
+            onSelectActivity={(activityId) =>
+              setSelection(normalizedData.selectedClassId, activityId)
+            }
             onExport={handleExportBackup}
-            onClear={handleClearClass}
+            onClearActivity={handleClearActivityResults}
           />
         </Suspense>
       );
     }
 
     if (activeView === "result") {
-      const result = lastResult || studentsResults[0];
+      const result = lastResult;
       if (!result) {
         return (
           <ScannerView
-            questionCount={examConfig.questionCount}
-            onCapture={handleCapture}
+            classes={classes}
+            selectedClassId={normalizedData.selectedClassId}
+            selectedActivityId={normalizedData.selectedActivityId}
+            onSelectClass={(classId) => setSelection(classId)}
+            onSelectActivity={(activityId) =>
+              setSelection(normalizedData.selectedClassId, activityId)
+            }
+            onCapture={handleScannerCapture}
           />
         );
       }
+
       return (
         <ResultView
           result={result}
@@ -1127,7 +1879,14 @@ export default function App() {
     }
 
     return (
-      <ScannerView questionCount={examConfig.questionCount} onCapture={handleCapture} />
+      <ScannerView
+        classes={classes}
+        selectedClassId={normalizedData.selectedClassId}
+        selectedActivityId={normalizedData.selectedActivityId}
+        onSelectClass={(classId) => setSelection(classId)}
+        onSelectActivity={(activityId) => setSelection(normalizedData.selectedClassId, activityId)}
+        onCapture={handleScannerCapture}
+      />
     );
   };
 
