@@ -1,16 +1,22 @@
-import React, { Suspense, lazy, memo, useEffect, useMemo, useRef, useState } from "react";
+import React, { Suspense, lazy, memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Camera,
   CheckCircle2,
   ClipboardCheck,
+  Edit3,
   LayoutDashboard,
   Printer,
   School,
+  Search,
   Settings2,
   User,
+  UserCheck,
   Users,
+  X,
+  XCircle,
 } from "lucide-react";
 import QRCode from "qrcode";
+import jsQR from "jsqr";
 
 const LazyConfigGabaritoView = lazy(() => import("./views/ConfigGabaritoView.jsx"));
 const LazyDashboardView = lazy(() => import("./views/DashboardView.jsx"));
@@ -119,6 +125,10 @@ function randomStudentName() {
   return `${first[Math.floor(Math.random() * first.length)]} ${
     last[Math.floor(Math.random() * last.length)]
   }`;
+}
+
+function randomAnswers(count) {
+  return Array.from({ length: count }, () => OPTIONS[Math.floor(Math.random() * OPTIONS.length)]);
 }
 
 function createId(prefix) {
@@ -432,6 +442,61 @@ const ScannerOverlay = memo(function ScannerOverlay({
   );
 });
 
+function StudentSelector({ students, onSelect, onClose }) {
+  const [query, setQuery] = useState("");
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return students;
+    return students.filter((s) => s.name.toLowerCase().includes(q));
+  }, [students, query]);
+
+  return (
+    <div className="fixed inset-0 z-[60] flex items-end justify-center bg-black/50 backdrop-blur-sm sm:items-center" onClick={onClose}>
+      <div
+        className="relative w-full max-w-md max-h-[85vh] rounded-t-2xl bg-white p-5 shadow-xl sm:rounded-2xl animate-in"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="mb-4 flex items-center justify-between">
+          <h3 className="text-base font-semibold text-slate-900">Selecionar Aluno</h3>
+          <button type="button" onClick={onClose} className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-600">
+            <X className="h-5 w-5" />
+          </button>
+        </div>
+
+        <div className="relative mb-3">
+          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+          <input
+            type="text"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Pesquisar aluno..."
+            className="w-full rounded-lg border border-slate-300 bg-white py-2 pl-9 pr-3 text-sm text-slate-900 placeholder:text-slate-400 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+            autoFocus
+          />
+        </div>
+
+        <div className="max-h-[55vh] space-y-1 overflow-y-auto pr-1">
+          {filtered.length === 0 ? (
+            <p className="py-6 text-center text-sm text-slate-400">Nenhum aluno encontrado.</p>
+          ) : (
+            filtered.map((student) => (
+              <button
+                key={student.id}
+                type="button"
+                onClick={() => onSelect(student)}
+                className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2.5 text-left text-sm font-medium text-slate-700 transition hover:bg-blue-50 hover:text-blue-700"
+              >
+                <User className="h-4 w-4 shrink-0 text-slate-400" />
+                {student.name}
+              </button>
+            ))
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function ScannerView({
   classes,
   selectedClassId,
@@ -439,6 +504,7 @@ function ScannerView({
   onSelectClass,
   onSelectActivity,
   onCapture,
+  onIdentifyStudent,
 }) {
   const selectedClass = useMemo(
     () => classes.find((item) => item.id === selectedClassId) || null,
@@ -487,6 +553,10 @@ function ScannerView({
   const [autoCaptureMessage, setAutoCaptureMessage] = useState(
     "Captura automatica aguardando alinhamento...",
   );
+  const [showStudentSelector, setShowStudentSelector] = useState(false);
+  const [qrStudentName, setQrStudentName] = useState("");
+  const qrScanCanvasRef = useRef(null);
+  const qrScanIntervalRef = useRef(null);
 
   const drawOverlayFeedback = (points, frameSize) => {
     const canvas = overlayCanvasRef.current;
@@ -916,6 +986,70 @@ function ScannerView({
     isCapturing,
   ]);
 
+  // --- QR Code scanning with jsQR ---
+  useEffect(() => {
+    if (!isCameraActive || !cameraReady || cameraBlocked) return undefined;
+
+    const canvas = document.createElement("canvas");
+    qrScanCanvasRef.current = canvas;
+
+    qrScanIntervalRef.current = window.setInterval(() => {
+      const video = videoRef.current;
+      if (!video || !video.videoWidth || !video.videoHeight) return;
+
+      const w = Math.min(640, video.videoWidth);
+      const h = Math.floor((w / video.videoWidth) * video.videoHeight);
+      if (canvas.width !== w || canvas.height !== h) {
+        canvas.width = w;
+        canvas.height = h;
+      }
+      const ctx = canvas.getContext("2d", { willReadFrequently: true });
+      if (!ctx) return;
+      ctx.drawImage(video, 0, 0, w, h);
+      const imageData = ctx.getImageData(0, 0, w, h);
+      const code = jsQR(imageData.data, w, h, { inversionAttempts: "dontInvert" });
+      if (code && code.data) {
+        const text = code.data.trim();
+        if (text) {
+          setQrStudentName(text);
+        }
+      }
+    }, 500);
+
+    return () => {
+      if (qrScanIntervalRef.current) {
+        window.clearInterval(qrScanIntervalRef.current);
+        qrScanIntervalRef.current = null;
+      }
+    };
+  }, [isCameraActive, cameraReady, cameraBlocked]);
+
+  const handleStudentIdentified = useCallback(
+    (student) => {
+      if (!selectedActivity) return;
+      const simulated = randomAnswers(selectedActivity.questionCount);
+      onIdentifyStudent({
+        student,
+        scannedAnswers: simulated,
+        classForResult: selectedClass,
+        activityForResult: selectedActivity,
+      });
+    },
+    [selectedClass, selectedActivity, onIdentifyStudent],
+  );
+
+  // Auto-advance when QR detects a student name
+  useEffect(() => {
+    if (!qrStudentName || !selectedClass) return;
+    const found = selectedClass.students.find(
+      (s) => s.name.toLowerCase() === qrStudentName.toLowerCase(),
+    );
+    if (found) {
+      handleStudentIdentified(found);
+      setQrStudentName("");
+    }
+  }, [qrStudentName, selectedClass, handleStudentIdentified]);
+
   if (!isCameraActive) {
     return (
       <section className="mx-auto flex h-[calc(100vh-4rem)] w-full max-w-7xl items-center px-4 sm:px-6">
@@ -1091,8 +1225,34 @@ function ScannerView({
               O leitor captura sozinho quando os 4 alvos estiverem alinhados.
             </p>
           )}
+
+          <button
+            type="button"
+            onClick={() => setShowStudentSelector(true)}
+            disabled={!selectedClass}
+            className="rounded-lg bg-amber-500 px-3 py-1.5 text-xs font-medium text-white transition hover:bg-amber-600 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            <span className="inline-flex items-center gap-1.5"><UserCheck className="h-3.5 w-3.5" /> Selecionar Aluno Manualmente</span>
+          </button>
+
+          {qrStudentName && (
+            <div className="rounded-lg bg-emerald-500/90 px-3 py-1.5 text-xs font-medium text-white">
+              QR detectado: {qrStudentName}
+            </div>
+          )}
         </div>
       </div>
+
+      {showStudentSelector && selectedClass && (
+        <StudentSelector
+          students={selectedClass.students}
+          onSelect={(student) => {
+            setShowStudentSelector(false);
+            handleStudentIdentified(student);
+          }}
+          onClose={() => setShowStudentSelector(false)}
+        />
+      )}
     </section>
   );
 }
@@ -1335,6 +1495,125 @@ const TemplateView = memo(function TemplateView({ schoolName, classroom, activit
   );
 });
 
+function ReviewView({ reviewData, onConfirm, onDiscard }) {
+  const { student, classForResult, activityForResult, scannedAnswers } = reviewData;
+  const officialKey = activityForResult.officialKey.slice(0, activityForResult.questionCount);
+  const [editedAnswers, setEditedAnswers] = useState(() => [...scannedAnswers]);
+
+  const correctCount = editedAnswers.reduce(
+    (acc, ans, idx) => (ans === officialKey[idx] ? acc + 1 : acc),
+    0,
+  );
+  const total = activityForResult.questionCount;
+  const score = total > 0 ? (correctCount / total) * 10 : 0;
+
+  const handleOptionClick = (qIndex, option) => {
+    setEditedAnswers((prev) => {
+      const copy = [...prev];
+      copy[qIndex] = option;
+      return copy;
+    });
+  };
+
+  return (
+    <section className="mx-auto w-full max-w-3xl px-4 pb-12 pt-6 sm:px-6">
+      <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
+        <div className="mb-5 flex items-center gap-3">
+          <div className="rounded-xl bg-blue-600 p-2.5 text-white">
+            <Edit3 className="h-5 w-5" />
+          </div>
+          <div>
+            <h2 className="text-lg font-semibold text-slate-900">Revisao de Leitura</h2>
+            <p className="text-sm text-slate-500">{classForResult.name} • {activityForResult.name}</p>
+          </div>
+        </div>
+
+        <div className="mb-5 rounded-xl border border-slate-200 bg-slate-50 p-4">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <User className="h-4 w-4 text-slate-500" />
+              <span className="text-sm font-medium text-slate-900">{student.name}</span>
+            </div>
+            <div className="text-right">
+              <p className="text-xs text-slate-500">Previsao</p>
+              <p className="text-xl font-bold text-blue-600">{score.toFixed(1)}</p>
+              <p className="text-xs text-slate-500">{correctCount}/{total} acertos</p>
+            </div>
+          </div>
+        </div>
+
+        <p className="mb-3 text-xs text-slate-500">Clique numa alternativa para corrigir a leitura da camera.</p>
+
+        <div className="grid gap-1.5 sm:grid-cols-2">
+          {Array.from({ length: total }, (_, qIdx) => {
+            const isCorrect = editedAnswers[qIdx] === officialKey[qIdx];
+            return (
+              <div
+                key={qIdx}
+                className={`flex items-center gap-2 rounded-lg border px-3 py-2 ${
+                  isCorrect
+                    ? "border-emerald-200 bg-emerald-50"
+                    : "border-red-200 bg-red-50"
+                }`}
+              >
+                <span className="w-8 shrink-0 text-xs font-semibold text-slate-600">Q{qIdx + 1}</span>
+                <div className="flex gap-1">
+                  {OPTIONS.map((op) => {
+                    const isSelected = editedAnswers[qIdx] === op;
+                    const isOfficial = officialKey[qIdx] === op;
+                    let cls = "h-7 w-7 rounded-full border-2 text-[10px] font-semibold flex items-center justify-center cursor-pointer transition ";
+                    if (isSelected && isCorrect) {
+                      cls += "border-emerald-500 bg-emerald-500 text-white";
+                    } else if (isSelected && !isCorrect) {
+                      cls += "border-red-500 bg-red-500 text-white";
+                    } else if (isOfficial) {
+                      cls += "border-emerald-400 bg-emerald-100 text-emerald-700";
+                    } else {
+                      cls += "border-slate-300 bg-white text-slate-500 hover:border-blue-400 hover:bg-blue-50";
+                    }
+                    return (
+                      <button
+                        key={op}
+                        type="button"
+                        onClick={() => handleOptionClick(qIdx, op)}
+                        className={cls}
+                      >
+                        {op}
+                      </button>
+                    );
+                  })}
+                </div>
+                {isCorrect ? (
+                  <CheckCircle2 className="ml-auto h-4 w-4 shrink-0 text-emerald-500" />
+                ) : (
+                  <XCircle className="ml-auto h-4 w-4 shrink-0 text-red-500" />
+                )}
+              </div>
+            );
+          })}
+        </div>
+
+        <div className="mt-6 grid grid-cols-2 gap-3">
+          <button
+            type="button"
+            onClick={onDiscard}
+            className="rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-medium text-slate-700 transition hover:bg-slate-50"
+          >
+            <span className="inline-flex items-center gap-1.5"><XCircle className="h-4 w-4" /> Descartar Leitura</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => onConfirm(editedAnswers)}
+            className="rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-medium text-white transition hover:bg-blue-700"
+          >
+            <span className="inline-flex items-center gap-1.5"><CheckCircle2 className="h-4 w-4" /> Confirmar e Gravar Nota</span>
+          </button>
+        </div>
+      </div>
+    </section>
+  );
+}
+
 function ResultView({ result, onBackScanner, onOpenDashboard }) {
   return (
     <section className="mx-auto w-full max-w-4xl px-4 pb-10 pt-6 sm:px-6">
@@ -1396,6 +1675,7 @@ export default function App() {
   const [activeView, setActiveView] = useState("scanner");
   const [selectedTemplateStudentId, setSelectedTemplateStudentId] = useState("");
   const [lastResult, setLastResult] = useState(null);
+  const [reviewData, setReviewData] = useState(null);
 
   const [appData, setAppData] = useLocalStorage(STORAGE_KEYS.v2Data, null);
 
@@ -1705,6 +1985,73 @@ export default function App() {
     setActiveView("result");
   };
 
+  const handleIdentifyStudent = (data) => {
+    setReviewData(data);
+    setActiveView("review");
+  };
+
+  const handleConfirmReview = (editedAnswers) => {
+    if (!reviewData) return;
+    const { student, classForResult, activityForResult } = reviewData;
+    const official = activityForResult.officialKey.slice(0, activityForResult.questionCount);
+    const studentAnswers = editedAnswers.slice(0, activityForResult.questionCount);
+
+    const correctCount = studentAnswers.reduce(
+      (acc, answer, idx) => (answer === official[idx] ? acc + 1 : acc),
+      0,
+    );
+
+    const rawScore =
+      activityForResult.questionCount > 0
+        ? (correctCount / activityForResult.questionCount) * 10
+        : 0;
+
+    const weightedScore = rawScore * Number(activityForResult.weight || 1);
+
+    const result = {
+      id: Date.now(),
+      classId: classForResult.id,
+      className: classForResult.name,
+      activityId: activityForResult.id,
+      activityName: activityForResult.name,
+      studentId: student?.id || null,
+      studentName: student?.name || "Aluno nao identificado",
+      studentAnswers,
+      correctCount,
+      totalQuestions: activityForResult.questionCount,
+      score: Number(rawScore.toFixed(1)),
+      weightedScore: Number(weightedScore.toFixed(2)),
+      createdAt: new Date().toISOString(),
+      qrData: null,
+    };
+
+    setAppData((prev) => {
+      const current = normalizeAppData(prev || normalizedData);
+      return {
+        ...current,
+        selectedClassId: classForResult.id,
+        selectedActivityId: activityForResult.id,
+        classes: current.classes.map((classroom) => {
+          if (classroom.id !== classForResult.id) return classroom;
+          return {
+            ...classroom,
+            activities: classroom.activities.map((activity) => {
+              if (activity.id !== activityForResult.id) return activity;
+              return {
+                ...activity,
+                results: [result, ...(activity.results || [])],
+              };
+            }),
+          };
+        }),
+      };
+    });
+
+    setLastResult(result);
+    setReviewData(null);
+    setActiveView("result");
+  };
+
   const handleExportBackup = () => {
     const payload = {
       exportedAt: new Date().toISOString(),
@@ -1736,6 +2083,40 @@ export default function App() {
             activities: classroom.activities.map((activity) =>
               activity.id === selectedActivity.id ? { ...activity, results: [] } : activity,
             ),
+          };
+        }),
+      };
+    });
+  };
+
+  const handleUpdateStudentResult = (classId, activityId, resultId, editedAnswers, newCorrectCount, newScore) => {
+    setAppData((prev) => {
+      const current = normalizeAppData(prev || normalizedData);
+      return {
+        ...current,
+        classes: current.classes.map((classroom) => {
+          if (classroom.id !== classId) return classroom;
+          return {
+            ...classroom,
+            activities: classroom.activities.map((activity) => {
+              if (activity.id !== activityId) return activity;
+              return {
+                ...activity,
+                results: activity.results.map((r) => {
+                  if (r.id !== resultId) return r;
+                  const rawScore = activity.questionCount > 0
+                    ? (newCorrectCount / activity.questionCount) * 10
+                    : 0;
+                  return {
+                    ...r,
+                    studentAnswers: editedAnswers,
+                    correctCount: newCorrectCount,
+                    score: Number(rawScore.toFixed(1)),
+                    weightedScore: Number((rawScore * Number(activity.weight || 1)).toFixed(2)),
+                  };
+                }),
+              };
+            }),
           };
         }),
       };
@@ -1847,8 +2228,26 @@ export default function App() {
             }
             onExport={handleExportBackup}
             onClearActivity={handleClearActivityResults}
+            onUpdateStudentResult={handleUpdateStudentResult}
           />
         </Suspense>
+      );
+    }
+
+    if (activeView === "review") {
+      if (!reviewData) {
+        setActiveView("scanner");
+        return null;
+      }
+      return (
+        <ReviewView
+          reviewData={reviewData}
+          onConfirm={handleConfirmReview}
+          onDiscard={() => {
+            setReviewData(null);
+            setActiveView("scanner");
+          }}
+        />
       );
     }
 
@@ -1865,6 +2264,7 @@ export default function App() {
               setSelection(normalizedData.selectedClassId, activityId)
             }
             onCapture={handleScannerCapture}
+            onIdentifyStudent={handleIdentifyStudent}
           />
         );
       }
@@ -1886,6 +2286,7 @@ export default function App() {
         onSelectClass={(classId) => setSelection(classId)}
         onSelectActivity={(activityId) => setSelection(normalizedData.selectedClassId, activityId)}
         onCapture={handleScannerCapture}
+        onIdentifyStudent={handleIdentifyStudent}
       />
     );
   };
