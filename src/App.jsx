@@ -23,6 +23,15 @@ const LazyDashboardView = lazy(() => import("./views/DashboardView.jsx"));
 
 const OPTIONS = ["A", "B", "C", "D", "E"];
 
+function columnOrderIndices(total) {
+  const half = Math.ceil(total / 2);
+  const left = [];
+  const right = [];
+  for (let i = 0; i < half; i++) left.push(i);
+  for (let i = half; i < total; i++) right.push(i);
+  return { left, right };
+}
+
 const STORAGE_KEYS = {
   v2Data: "dracker_v2_data",
   schoolInfo: "dracker_school_info",
@@ -524,37 +533,49 @@ function ManualAnswerEntry({ students, questionCount, officialKey, onSubmit, onC
               Marque a resposta de cada questao ({filledCount}/{questionCount} preenchidas):
             </p>
 
-            <div className="grid gap-1.5 sm:grid-cols-2 max-h-[50vh] overflow-y-auto pr-1">
-              {Array.from({ length: questionCount }, (_, qIdx) => (
-                <div key={qIdx} className="flex items-center gap-2 rounded-lg border border-slate-200 px-2.5 py-1.5">
-                  <span className="w-7 shrink-0 text-xs font-semibold text-slate-600">Q{qIdx + 1}</span>
-                  <div className="flex gap-1">
-                    {OPTIONS.map((op) => {
-                      const isSelected = manualAnswers[qIdx] === op;
-                      return (
-                        <button
-                          key={op}
-                          type="button"
-                          onClick={() => {
-                            setManualAnswers((prev) => {
-                              const copy = [...prev];
-                              copy[qIdx] = op;
-                              return copy;
-                            });
-                          }}
-                          className={`h-7 w-7 rounded-full border-2 text-[10px] font-semibold flex items-center justify-center transition ${
-                            isSelected
-                              ? "border-blue-600 bg-blue-600 text-white"
-                              : "border-slate-300 bg-white text-slate-500 hover:border-blue-400 hover:bg-blue-50"
-                          }`}
-                        >
-                          {op}
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-              ))}
+            <div className="grid gap-x-4 sm:grid-cols-2 max-h-[50vh] overflow-y-auto pr-1">
+              {(() => {
+                const { left, right } = columnOrderIndices(questionCount);
+                const renderQ = (qIdx) => {
+                  const isSelected = manualAnswers[qIdx] !== "";
+                  return (
+                    <div key={qIdx} className="flex items-center gap-2 rounded-lg border border-slate-200 px-2.5 py-1.5 mb-1.5">
+                      <span className="w-7 shrink-0 text-xs font-semibold text-slate-600">Q{qIdx + 1}</span>
+                      <div className="flex gap-1">
+                        {OPTIONS.map((op) => {
+                          const active = manualAnswers[qIdx] === op;
+                          return (
+                            <button
+                              key={op}
+                              type="button"
+                              onClick={() => {
+                                setManualAnswers((prev) => {
+                                  const copy = [...prev];
+                                  copy[qIdx] = op;
+                                  return copy;
+                                });
+                              }}
+                              className={`h-7 w-7 rounded-full border-2 text-[10px] font-semibold flex items-center justify-center transition ${
+                                active
+                                  ? "border-blue-600 bg-blue-600 text-white"
+                                  : "border-slate-300 bg-white text-slate-500 hover:border-blue-400 hover:bg-blue-50"
+                              }`}
+                            >
+                              {op}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  );
+                };
+                return (
+                  <>
+                    <div>{left.map(renderQ)}</div>
+                    <div>{right.map(renderQ)}</div>
+                  </>
+                );
+              })()}
             </div>
 
             <div className="mt-4 grid grid-cols-2 gap-2">
@@ -1683,53 +1704,48 @@ function ReviewView({ reviewData, onConfirm, onDiscard }) {
 
         <p className="mb-3 text-xs text-slate-500">Clique numa alternativa para corrigir a leitura da camera.</p>
 
-        <div className="grid gap-1.5 sm:grid-cols-2">
-          {Array.from({ length: total }, (_, qIdx) => {
-            const isCorrect = editedAnswers[qIdx] === officialKey[qIdx];
-            return (
-              <div
-                key={qIdx}
-                className={`flex items-center gap-2 rounded-lg border px-3 py-2 ${
-                  isCorrect
-                    ? "border-emerald-200 bg-emerald-50"
-                    : "border-red-200 bg-red-50"
-                }`}
-              >
-                <span className="w-8 shrink-0 text-xs font-semibold text-slate-600">Q{qIdx + 1}</span>
-                <div className="flex gap-1">
-                  {OPTIONS.map((op) => {
-                    const isSelected = editedAnswers[qIdx] === op;
-                    const isOfficial = officialKey[qIdx] === op;
-                    let cls = "h-7 w-7 rounded-full border-2 text-[10px] font-semibold flex items-center justify-center cursor-pointer transition ";
-                    if (isSelected && isCorrect) {
-                      cls += "border-emerald-500 bg-emerald-500 text-white";
-                    } else if (isSelected && !isCorrect) {
-                      cls += "border-red-500 bg-red-500 text-white";
-                    } else if (isOfficial) {
-                      cls += "border-emerald-400 bg-emerald-100 text-emerald-700";
-                    } else {
-                      cls += "border-slate-300 bg-white text-slate-500 hover:border-blue-400 hover:bg-blue-50";
-                    }
-                    return (
-                      <button
-                        key={op}
-                        type="button"
-                        onClick={() => handleOptionClick(qIdx, op)}
-                        className={cls}
-                      >
-                        {op}
-                      </button>
-                    );
-                  })}
+        <div className="grid gap-x-4 sm:grid-cols-2">
+          {(() => {
+            const { left, right } = columnOrderIndices(total);
+            const renderQ = (qIdx) => {
+              const isCorrect = editedAnswers[qIdx] === officialKey[qIdx];
+              return (
+                <div
+                  key={qIdx}
+                  className={`flex items-center gap-2 rounded-lg border px-3 py-2 mb-1.5 ${
+                    isCorrect ? "border-emerald-200 bg-emerald-50" : "border-red-200 bg-red-50"
+                  }`}
+                >
+                  <span className="w-8 shrink-0 text-xs font-semibold text-slate-600">Q{qIdx + 1}</span>
+                  <div className="flex gap-1">
+                    {OPTIONS.map((op) => {
+                      const isSelected = editedAnswers[qIdx] === op;
+                      const isOfficial = officialKey[qIdx] === op;
+                      let cls = "h-7 w-7 rounded-full border-2 text-[10px] font-semibold flex items-center justify-center cursor-pointer transition ";
+                      if (isSelected && isCorrect) cls += "border-emerald-500 bg-emerald-500 text-white";
+                      else if (isSelected && !isCorrect) cls += "border-red-500 bg-red-500 text-white";
+                      else if (isOfficial) cls += "border-emerald-400 bg-emerald-100 text-emerald-700";
+                      else cls += "border-slate-300 bg-white text-slate-500 hover:border-blue-400 hover:bg-blue-50";
+                      return (
+                        <button key={op} type="button" onClick={() => handleOptionClick(qIdx, op)} className={cls}>{op}</button>
+                      );
+                    })}
+                  </div>
+                  {isCorrect ? (
+                    <CheckCircle2 className="ml-auto h-4 w-4 shrink-0 text-emerald-500" />
+                  ) : (
+                    <XCircle className="ml-auto h-4 w-4 shrink-0 text-red-500" />
+                  )}
                 </div>
-                {isCorrect ? (
-                  <CheckCircle2 className="ml-auto h-4 w-4 shrink-0 text-emerald-500" />
-                ) : (
-                  <XCircle className="ml-auto h-4 w-4 shrink-0 text-red-500" />
-                )}
-              </div>
+              );
+            };
+            return (
+              <>
+                <div>{left.map(renderQ)}</div>
+                <div>{right.map(renderQ)}</div>
+              </>
             );
-          })}
+          })()}
         </div>
 
         <div className="mt-6 grid grid-cols-2 gap-3">
@@ -2209,6 +2225,16 @@ export default function App() {
     URL.revokeObjectURL(url);
   };
 
+  const handleRestoreBackup = (data) => {
+    const v2Data = data[STORAGE_KEYS.v2Data];
+    if (v2Data) {
+      setAppData(normalizeAppData(v2Data));
+      alert("Backup restaurado com sucesso!");
+    } else {
+      alert("Formato de backup inválido. Não foi possível restaurar.");
+    }
+  };
+
   const handleClearActivityResults = () => {
     if (!selectedClass || !selectedActivity) return;
     setAppData((prev) => {
@@ -2366,6 +2392,7 @@ export default function App() {
               setSelection(normalizedData.selectedClassId, activityId)
             }
             onExport={handleExportBackup}
+            onRestore={handleRestoreBackup}
             onClearActivity={handleClearActivityResults}
             onUpdateStudentResult={handleUpdateStudentResult}
           />

@@ -1,4 +1,4 @@
-import React, { useMemo, useState, useCallback } from "react";
+import React, { useMemo, useState, useCallback, useRef } from "react";
 import {
   Award,
   BarChart3,
@@ -12,6 +12,7 @@ import {
   Search,
   Trash2,
   TrendingUp,
+  Upload,
   User,
   Users,
   X,
@@ -19,6 +20,15 @@ import {
 } from "lucide-react";
 
 const OPTIONS = ["A", "B", "C", "D", "E"];
+
+function columnOrderIndices(total) {
+  const half = Math.ceil(total / 2);
+  const left = [];
+  const right = [];
+  for (let i = 0; i < half; i++) left.push(i);
+  for (let i = half; i < total; i++) right.push(i);
+  return { left, right };
+}
 
 // ─── Score Distribution Histogram ───
 function ScoreDistribution({ results }) {
@@ -210,55 +220,48 @@ function StudentAnswerModal({ result, officialKey, onClose, onSaveEdited }) {
           Clique nas alternativas para corrigir. A nota recalcula em tempo real.
         </p>
 
-        <div className="grid gap-1.5 sm:grid-cols-2">
-          {Array.from({ length: total }, (_, qIdx) => {
-            const isCorrect = editedAnswers[qIdx] === officialKey[qIdx];
-            return (
-              <div
-                key={qIdx}
-                className={`flex items-center gap-2 rounded-lg border px-3 py-2 ${
-                  isCorrect ? "border-emerald-200 bg-emerald-50" : "border-red-200 bg-red-50"
-                }`}
-              >
-                <span className="w-8 shrink-0 text-xs font-semibold text-slate-600">
-                  Q{qIdx + 1}
-                </span>
-                <div className="flex gap-1">
-                  {OPTIONS.map((op) => {
-                    const isSelected = editedAnswers[qIdx] === op;
-                    const isOfficial = officialKey[qIdx] === op;
-                    let cls =
-                      "h-7 w-7 rounded-full border-2 text-[10px] font-semibold flex items-center justify-center cursor-pointer transition ";
-                    if (isSelected && isCorrect) {
-                      cls += "border-emerald-500 bg-emerald-500 text-white";
-                    } else if (isSelected && !isCorrect) {
-                      cls += "border-red-500 bg-red-500 text-white";
-                    } else if (isOfficial) {
-                      cls += "border-emerald-400 bg-emerald-100 text-emerald-700";
-                    } else {
-                      cls +=
-                        "border-slate-300 bg-white text-slate-500 hover:border-blue-400 hover:bg-blue-50";
-                    }
-                    return (
-                      <button
-                        key={op}
-                        type="button"
-                        onClick={() => handleOptionClick(qIdx, op)}
-                        className={cls}
-                      >
-                        {op}
-                      </button>
-                    );
-                  })}
+        <div className="grid gap-x-4 sm:grid-cols-2">
+          {(() => {
+            const { left, right } = columnOrderIndices(total);
+            const renderQ = (qIdx) => {
+              const isCorrect = editedAnswers[qIdx] === officialKey[qIdx];
+              return (
+                <div
+                  key={qIdx}
+                  className={`flex items-center gap-2 rounded-lg border px-3 py-2 mb-1.5 ${
+                    isCorrect ? "border-emerald-200 bg-emerald-50" : "border-red-200 bg-red-50"
+                  }`}
+                >
+                  <span className="w-8 shrink-0 text-xs font-semibold text-slate-600">Q{qIdx + 1}</span>
+                  <div className="flex gap-1">
+                    {OPTIONS.map((op) => {
+                      const isSelected = editedAnswers[qIdx] === op;
+                      const isOfficial = officialKey[qIdx] === op;
+                      let cls = "h-7 w-7 rounded-full border-2 text-[10px] font-semibold flex items-center justify-center cursor-pointer transition ";
+                      if (isSelected && isCorrect) cls += "border-emerald-500 bg-emerald-500 text-white";
+                      else if (isSelected && !isCorrect) cls += "border-red-500 bg-red-500 text-white";
+                      else if (isOfficial) cls += "border-emerald-400 bg-emerald-100 text-emerald-700";
+                      else cls += "border-slate-300 bg-white text-slate-500 hover:border-blue-400 hover:bg-blue-50";
+                      return (
+                        <button key={op} type="button" onClick={() => handleOptionClick(qIdx, op)} className={cls}>{op}</button>
+                      );
+                    })}
+                  </div>
+                  {isCorrect ? (
+                    <CheckCircle2 className="ml-auto h-4 w-4 shrink-0 text-emerald-500" />
+                  ) : (
+                    <XCircle className="ml-auto h-4 w-4 shrink-0 text-red-500" />
+                  )}
                 </div>
-                {isCorrect ? (
-                  <CheckCircle2 className="ml-auto h-4 w-4 shrink-0 text-emerald-500" />
-                ) : (
-                  <XCircle className="ml-auto h-4 w-4 shrink-0 text-red-500" />
-                )}
-              </div>
+              );
+            };
+            return (
+              <>
+                <div>{left.map(renderQ)}</div>
+                <div>{right.map(renderQ)}</div>
+              </>
             );
-          })}
+          })()}
         </div>
 
         {hasChanges && (
@@ -653,6 +656,30 @@ export default function DashboardView({
           <Download className="h-4 w-4" />
           Baixar Backup
         </button>
+        <label className="no-print inline-flex cursor-pointer items-center gap-2 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-xs font-medium text-blue-700 transition hover:bg-blue-100">
+          <Upload className="h-4 w-4" />
+          Restaurar Backup
+          <input
+            type="file"
+            accept=".json"
+            className="hidden"
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              if (!file || !onRestore) return;
+              const reader = new FileReader();
+              reader.onload = (ev) => {
+                try {
+                  const data = JSON.parse(ev.target.result);
+                  onRestore(data);
+                } catch {
+                  alert("Arquivo de backup invalido.");
+                }
+              };
+              reader.readAsText(file);
+              e.target.value = "";
+            }}
+          />
+        </label>
         <button
           type="button"
           onClick={onClearActivity}

@@ -3,6 +3,15 @@ import { Plus, Settings2 } from "lucide-react";
 
 const OPTIONS = ["A", "B", "C", "D", "E"];
 
+function columnOrderIndices(total) {
+  const half = Math.ceil(total / 2);
+  const left = [];
+  const right = [];
+  for (let i = 0; i < half; i++) left.push(i);
+  for (let i = half; i < total; i++) right.push(i);
+  return { left, right };
+}
+
 export default function ConfigGabaritoView({
   classes,
   selectedClassId,
@@ -341,39 +350,49 @@ export default function ConfigGabaritoView({
               </div>
             </div>
 
-            <div className="mt-4 grid max-h-[320px] gap-2 overflow-auto rounded-lg border border-slate-200 bg-white p-3 sm:grid-cols-2">
-              {Array.from({ length: questionCount }, (_, index) => index + 1).map(
-                (qNumber, index) => (
-                  <div key={qNumber} className="rounded border border-slate-200 p-2">
-                    <p className="mb-1 text-xs font-medium text-slate-600">Q{qNumber}</p>
-                    <div className="grid grid-cols-5 gap-1">
-                      {OPTIONS.map((option) => {
-                        const active = answers[index] === option;
-                        return (
-                          <button
-                            key={`${qNumber}-${option}`}
-                            type="button"
-                            onClick={() => {
-                              setAnswers((prev) => {
-                                const next = [...prev];
-                                next[index] = option;
-                                return next;
-                              });
-                            }}
-                            className={`rounded border px-1 py-1 text-xs font-semibold ${
-                              active
-                                ? "border-blue-600 bg-blue-600 text-white"
-                                : "border-slate-300 bg-white text-slate-700"
-                            }`}
-                          >
-                            {option}
-                          </button>
-                        );
-                      })}
+            <div className="mt-4 grid max-h-[320px] gap-x-4 gap-y-2 overflow-auto rounded-lg border border-slate-200 bg-white p-3 sm:grid-cols-2">
+              {(() => {
+                const { left, right } = columnOrderIndices(questionCount);
+                const renderQ = (idx) => {
+                  const qNumber = idx + 1;
+                  return (
+                    <div key={qNumber} className="rounded border border-slate-200 p-2 mb-2">
+                      <p className="mb-1 text-xs font-medium text-slate-600">Q{qNumber}</p>
+                      <div className="grid grid-cols-5 gap-1">
+                        {OPTIONS.map((option) => {
+                          const active = answers[idx] === option;
+                          return (
+                            <button
+                              key={`${qNumber}-${option}`}
+                              type="button"
+                              onClick={() => {
+                                setAnswers((prev) => {
+                                  const next = [...prev];
+                                  next[idx] = option;
+                                  return next;
+                                });
+                              }}
+                              className={`rounded border px-1 py-1 text-xs font-semibold ${
+                                active
+                                  ? "border-blue-600 bg-blue-600 text-white"
+                                  : "border-slate-300 bg-white text-slate-700"
+                              }`}
+                            >
+                              {option}
+                            </button>
+                          );
+                        })}
+                      </div>
                     </div>
-                  </div>
-                ),
-              )}
+                  );
+                };
+                return (
+                  <>
+                    <div>{left.map(renderQ)}</div>
+                    <div>{right.map(renderQ)}</div>
+                  </>
+                );
+              })()}
             </div>
 
             <button
