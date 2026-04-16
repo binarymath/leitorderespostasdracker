@@ -147,16 +147,12 @@ function createDefaultActivity(name = "Atividade 1") {
   };
 }
 
-function createDefaultClass(name = "Turma A") {
-  const students = Array.from({ length: 6 }, (_, idx) => ({
-    id: createId("student"),
-    name: `${randomStudentName()} ${idx + 1}`,
-  }));
-  const activity = createDefaultActivity("Prova 1");
+function createDefaultClass(name = "Minha Turma") {
+  const activity = createDefaultActivity("Atividade 1");
   return {
     id: createId("class"),
     name,
-    students,
+    students: [],
     activities: [activity],
   };
 }
@@ -222,59 +218,7 @@ function migrateLegacyData() {
     if (v2Raw) {
       return normalizeAppData(JSON.parse(v2Raw));
     }
-
-    const schoolInfo = JSON.parse(window.localStorage.getItem(STORAGE_KEYS.schoolInfo) || "null") || {
-      name: "",
-    };
-    const studentList = JSON.parse(window.localStorage.getItem(STORAGE_KEYS.studentList) || "[]");
-    const examConfig = JSON.parse(window.localStorage.getItem(STORAGE_KEYS.officialKey) || "null") || {
-      questionCount: 20,
-      answers: Array.from({ length: 20 }, () => "A"),
-    };
-    const legacyResults = JSON.parse(window.localStorage.getItem(STORAGE_KEYS.studentsResults) || "[]");
-
-    const students = (Array.isArray(studentList) ? studentList : [])
-      .map((name) => String(name || "").trim())
-      .filter(Boolean)
-      .map((name) => ({ id: createId("student"), name }));
-
-    const count = Math.max(1, Number(examConfig.questionCount) || 20);
-    const activity = {
-      id: createId("activity"),
-      name: "Atividade Migrada",
-      questionCount: count,
-      weight: 1,
-      officialKey: Array.from({ length: count }, (_, idx) => examConfig?.answers?.[idx] || "A"),
-      results: Array.isArray(legacyResults)
-        ? legacyResults.map((item) => ({
-            ...item,
-            id: item?.id || Date.now() + Math.random(),
-            classId: null,
-            activityId: null,
-            studentId: null,
-            weightedScore:
-              typeof item?.weightedScore === "number"
-                ? item.weightedScore
-                : Number(item?.score || 0),
-          }))
-        : [],
-    };
-
-    const classroom = {
-      id: createId("class"),
-      name: "Turma Migrada",
-      students,
-      activities: [activity],
-    };
-
-    const migrated = normalizeAppData({
-      schoolInfo,
-      classes: [classroom],
-      selectedClassId: classroom.id,
-      selectedActivityId: activity.id,
-    });
-
-    return migrated;
+    return fallback;
   } catch {
     return fallback;
   }
@@ -967,7 +911,7 @@ function ScannerView({
       autoCaptureLockRef.current = true;
       handleCapture();
       autoCaptureTimerRef.current = null;
-    }, 700);
+    }, 2500);
 
     return () => {
       if (autoCaptureTimerRef.current) {
