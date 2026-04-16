@@ -288,7 +288,7 @@ function StudentAnswerModal({ result, officialKey, onClose, onSaveEdited }) {
 }
 
 // ─── Student Results Table ───
-function StudentResultsTable({ results, officialKey, onOpenStudent, searchQuery }) {
+function StudentResultsTable({ results, officialKey, onOpenStudent, onDeleteResult, searchQuery }) {
   const [sortField, setSortField] = useState("name");
   const [sortAsc, setSortAsc] = useState(true);
 
@@ -422,13 +422,26 @@ function StudentResultsTable({ results, officialKey, onOpenStudent, searchQuery 
                     : "-"}
                 </td>
                 <td className="px-3 py-2.5 text-center">
-                  <button
-                    type="button"
-                    onClick={() => onOpenStudent(r)}
-                    className="inline-flex items-center gap-1 rounded-lg bg-blue-50 px-2.5 py-1 text-blue-700 transition hover:bg-blue-100"
-                  >
-                    <Eye className="h-3 w-3" /> Ver
-                  </button>
+                  <div className="flex items-center justify-center gap-1">
+                    <button
+                      type="button"
+                      onClick={() => onOpenStudent(r)}
+                      className="inline-flex items-center gap-1 rounded-lg bg-blue-50 px-2.5 py-1 text-blue-700 transition hover:bg-blue-100"
+                    >
+                      <Eye className="h-3 w-3" /> Ver
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (window.confirm(`Excluir o resultado de ${r.studentName}?`)) {
+                          onDeleteResult(r.id);
+                        }
+                      }}
+                      className="inline-flex items-center gap-1 rounded-lg bg-rose-50 px-2.5 py-1 text-rose-700 transition hover:bg-rose-100 hover:text-rose-800"
+                    >
+                      <Trash2 className="h-3 w-3" /> Excluir
+                    </button>
+                  </div>
                 </td>
               </tr>
             );
@@ -485,8 +498,10 @@ export default function DashboardView({
   onSelectClass,
   onSelectActivity,
   onExport,
+  onRestore,
   onClearActivity,
   onUpdateStudentResult,
+  onDeleteStudentResult,
 }) {
   const [chartMode, setChartMode] = useState("bars");
   const [studentSearch, setStudentSearch] = useState("");
@@ -794,6 +809,7 @@ export default function DashboardView({
           results={scopedResults}
           officialKey={officialKey}
           onOpenStudent={setOpenResult}
+          onDeleteResult={(resultId) => onDeleteStudentResult(selectedClassId, selectedActivityId, resultId)}
           searchQuery={studentSearch}
         />
       </div>

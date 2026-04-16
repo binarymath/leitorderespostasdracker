@@ -2288,6 +2288,28 @@ export default function App() {
     });
   };
 
+  const handleDeleteStudentResult = (classId, activityId, resultId) => {
+    setAppData((prev) => {
+      const current = normalizeAppData(prev || normalizedData);
+      return {
+        ...current,
+        classes: current.classes.map((classroom) => {
+          if (classroom.id !== classId) return classroom;
+          return {
+            ...classroom,
+            activities: classroom.activities.map((activity) => {
+              if (activity.id !== activityId) return activity;
+              return {
+                ...activity,
+                results: activity.results.filter((r) => r.id !== resultId),
+              };
+            }),
+          };
+        }),
+      };
+    });
+  };
+
   const openTemplateForStudent = (studentId) => {
     setSelectedTemplateStudentId(studentId);
     setActiveView("template-print");
@@ -2395,6 +2417,7 @@ export default function App() {
             onRestore={handleRestoreBackup}
             onClearActivity={handleClearActivityResults}
             onUpdateStudentResult={handleUpdateStudentResult}
+            onDeleteStudentResult={handleDeleteStudentResult}
           />
         </Suspense>
       );
