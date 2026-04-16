@@ -235,7 +235,7 @@ function migrateLegacyData() {
 
 function Header({ activeView, onNavigate }) {
   const nav = [
-    { id: "scanner", label: "Leitor Real", icon: Camera },
+    { id: "scanner", label: "Scanner", icon: Camera },
     { id: "config", label: "Turmas e Atividades", icon: Settings2 },
     { id: "template", label: "Templates A4", icon: Printer },
     { id: "dashboard", label: "Dashboard", icon: LayoutDashboard },
@@ -1165,10 +1165,9 @@ function ScannerView({
               <div className="mx-auto mb-4 inline-flex rounded-full bg-blue-50 p-3 text-blue-600">
                 <Camera className="h-6 w-6" />
               </div>
-              <h2 className="text-xl font-semibold text-slate-900">Scanner real de gabaritos</h2>
+              <h2 className="text-xl font-semibold text-slate-900">Scanner de gabaritos</h2>
               <p className="mt-2 max-w-lg text-sm text-slate-500">
-                Tela reconstruida para guiar o enquadramento da folha A4 e alinhar melhor
-                com o gabarito impresso. Selecione turma e atividade e inicie a leitura.
+                Utilize esta ferramenta para capturar as respostas dos alunos através da camera do seu dispositivo. Selecione a turma e a atividade para iniciar a leitura automatica. Mantenha a folha bem iluminada e alinhada com as guias na tela.
               </p>
             </div>
 
