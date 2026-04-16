@@ -441,6 +441,146 @@ function StudentSelector({ students, onSelect, onClose }) {
   );
 }
 
+function ManualAnswerEntry({ students, questionCount, officialKey, onSubmit, onClose }) {
+  const [selectedStudent, setSelectedStudent] = useState(null);
+  const [manualAnswers, setManualAnswers] = useState(() =>
+    Array.from({ length: questionCount }, () => ""),
+  );
+  const [studentQuery, setStudentQuery] = useState("");
+
+  const filteredStudents = useMemo(() => {
+    const q = studentQuery.trim().toLowerCase();
+    if (!q) return students;
+    return students.filter((s) => s.name.toLowerCase().includes(q));
+  }, [students, studentQuery]);
+
+  const filledCount = manualAnswers.filter((a) => a !== "").length;
+
+  const handleSubmit = () => {
+    if (!selectedStudent) return;
+    const filled = manualAnswers.map((a) => (a || "X"));
+    onSubmit({ student: selectedStudent, answers: filled });
+  };
+
+  return (
+    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4" onClick={onClose}>
+      <div className="relative w-full max-w-lg max-h-[90vh] overflow-y-auto rounded-2xl bg-white p-5 shadow-xl" onClick={(e) => e.stopPropagation()}>
+        <div className="mb-4 flex items-center justify-between">
+          <h3 className="text-base font-semibold text-slate-900">Preencher Gabarito Manualmente</h3>
+          <button type="button" onClick={onClose} className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-100">
+            <X className="h-5 w-5" />
+          </button>
+        </div>
+
+        {!selectedStudent ? (
+          <>
+            <div className="relative mb-3">
+              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+              <input
+                type="text"
+                value={studentQuery}
+                onChange={(e) => setStudentQuery(e.target.value)}
+                placeholder="Pesquisar aluno..."
+                className="w-full rounded-lg border border-slate-300 bg-white py-2 pl-9 pr-3 text-sm placeholder:text-slate-400 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                autoFocus
+              />
+            </div>
+            <p className="mb-2 text-xs text-slate-500">Selecione o aluno para preencher o gabarito:</p>
+            <div className="max-h-[50vh] space-y-1 overflow-y-auto">
+              {filteredStudents.length === 0 ? (
+                <p className="py-4 text-center text-sm text-slate-400">Nenhum aluno encontrado.</p>
+              ) : (
+                filteredStudents.map((s) => (
+                  <button
+                    key={s.id}
+                    type="button"
+                    onClick={() => setSelectedStudent(s)}
+                    className="flex w-full items-center gap-2 rounded-lg px-3 py-2.5 text-left text-sm font-medium text-slate-700 transition hover:bg-blue-50 hover:text-blue-700"
+                  >
+                    <User className="h-4 w-4 shrink-0 text-slate-400" />
+                    {s.name}
+                  </button>
+                ))
+              )}
+            </div>
+          </>
+        ) : (
+          <>
+            <div className="mb-4 flex items-center justify-between rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
+              <div className="flex items-center gap-2">
+                <User className="h-4 w-4 text-blue-600" />
+                <span className="text-sm font-medium text-slate-800">{selectedStudent.name}</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setSelectedStudent(null)}
+                className="text-xs text-blue-600 hover:underline"
+              >
+                Trocar aluno
+              </button>
+            </div>
+
+            <p className="mb-2 text-xs text-slate-500">
+              Marque a resposta de cada questao ({filledCount}/{questionCount} preenchidas):
+            </p>
+
+            <div className="grid gap-1.5 sm:grid-cols-2 max-h-[50vh] overflow-y-auto pr-1">
+              {Array.from({ length: questionCount }, (_, qIdx) => (
+                <div key={qIdx} className="flex items-center gap-2 rounded-lg border border-slate-200 px-2.5 py-1.5">
+                  <span className="w-7 shrink-0 text-xs font-semibold text-slate-600">Q{qIdx + 1}</span>
+                  <div className="flex gap-1">
+                    {OPTIONS.map((op) => {
+                      const isSelected = manualAnswers[qIdx] === op;
+                      return (
+                        <button
+                          key={op}
+                          type="button"
+                          onClick={() => {
+                            setManualAnswers((prev) => {
+                              const copy = [...prev];
+                              copy[qIdx] = op;
+                              return copy;
+                            });
+                          }}
+                          className={`h-7 w-7 rounded-full border-2 text-[10px] font-semibold flex items-center justify-center transition ${
+                            isSelected
+                              ? "border-blue-600 bg-blue-600 text-white"
+                              : "border-slate-300 bg-white text-slate-500 hover:border-blue-400 hover:bg-blue-50"
+                          }`}
+                        >
+                          {op}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            <div className="mt-4 grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={onClose}
+                className="rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-50"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={handleSubmit}
+                disabled={filledCount === 0}
+                className="rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-60 disabled:cursor-not-allowed"
+              >
+                Enviar para Revisao
+              </button>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function ScannerView({
   classes,
   selectedClassId,
@@ -498,6 +638,7 @@ function ScannerView({
     "Captura automatica aguardando alinhamento...",
   );
   const [showStudentSelector, setShowStudentSelector] = useState(false);
+  const [showManualEntry, setShowManualEntry] = useState(false);
   const [qrStudentName, setQrStudentName] = useState("");
   const qrScanCanvasRef = useRef(null);
   const qrScanIntervalRef = useRef(null);
@@ -1075,7 +1216,34 @@ function ScannerView({
             <p>Posicione os 4 circulos pretos dentro do quadro.</p>
             <p>A leitura de QR identifica aluno e atividade automaticamente.</p>
           </div>
+
+          <button
+            type="button"
+            onClick={() => setShowManualEntry(true)}
+            disabled={!selectedClass || !selectedActivity}
+            className="mt-4 w-full rounded-xl border-2 border-dashed border-violet-300 bg-violet-50 px-4 py-3 text-sm font-medium text-violet-700 transition hover:bg-violet-100 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            <span className="inline-flex items-center justify-center gap-2"><Edit3 className="h-4 w-4" /> Preencher Gabarito Manualmente (sem camera)</span>
+          </button>
         </div>
+
+        {showManualEntry && selectedClass && selectedActivity && (
+          <ManualAnswerEntry
+            students={selectedClass.students}
+            questionCount={selectedActivity.questionCount}
+            officialKey={selectedActivity.officialKey}
+            onSubmit={({ student, answers }) => {
+              setShowManualEntry(false);
+              onIdentifyStudent({
+                student,
+                scannedAnswers: answers,
+                classForResult: selectedClass,
+                activityForResult: selectedActivity,
+              });
+            }}
+            onClose={() => setShowManualEntry(false)}
+          />
+        )}
       </section>
     );
   }
@@ -1179,6 +1347,15 @@ function ScannerView({
             <span className="inline-flex items-center gap-1.5"><UserCheck className="h-3.5 w-3.5" /> Selecionar Aluno Manualmente</span>
           </button>
 
+          <button
+            type="button"
+            onClick={() => setShowManualEntry(true)}
+            disabled={!selectedClass || !selectedActivity}
+            className="rounded-lg bg-violet-600 px-3 py-1.5 text-xs font-medium text-white transition hover:bg-violet-700 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            <span className="inline-flex items-center gap-1.5"><Edit3 className="h-3.5 w-3.5" /> Preencher Gabarito Manualmente</span>
+          </button>
+
           {qrStudentName && (
             <div className="rounded-lg bg-emerald-500/90 px-3 py-1.5 text-xs font-medium text-white">
               QR detectado: {qrStudentName}
@@ -1195,6 +1372,24 @@ function ScannerView({
             handleStudentIdentified(student);
           }}
           onClose={() => setShowStudentSelector(false)}
+        />
+      )}
+
+      {showManualEntry && selectedClass && selectedActivity && (
+        <ManualAnswerEntry
+          students={selectedClass.students}
+          questionCount={selectedActivity.questionCount}
+          officialKey={selectedActivity.officialKey}
+          onSubmit={({ student, answers }) => {
+            setShowManualEntry(false);
+            onIdentifyStudent({
+              student,
+              scannedAnswers: answers,
+              classForResult: selectedClass,
+              activityForResult: selectedActivity,
+            });
+          }}
+          onClose={() => setShowManualEntry(false)}
         />
       )}
     </section>
