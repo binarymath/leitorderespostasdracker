@@ -1,4 +1,4 @@
-import React, { useMemo, useState, useCallback, useRef } from "react";
+import React, { useMemo, useState, useCallback, useRef, useEffect } from "react";
 import {
   Award,
   BarChart3,
@@ -9,6 +9,7 @@ import {
   Download,
   Eye,
   PieChart,
+  RefreshCw,
   Search,
   Trash2,
   TrendingUp,
@@ -384,10 +385,13 @@ function StudentResultsTable({ results, officialKey, onOpenStudent, onDeleteResu
               r.totalQuestions > 0
                 ? Math.round((r.correctCount / r.totalQuestions) * 100)
                 : 0;
+            const hasScoreChanged = r.scoreChanged === true;
             return (
               <tr
                 key={r.id}
-                className="border-b border-slate-100 transition hover:bg-slate-50"
+                className={`border-b border-slate-100 transition ${
+                  hasScoreChanged ? "bg-blue-50/50" : "hover:bg-slate-50"
+                }`}
               >
                 <td className="px-3 py-2.5">
                   <div className="flex items-center gap-2">
@@ -409,9 +413,20 @@ function StudentResultsTable({ results, officialKey, onOpenStudent, onDeleteResu
                   </span>
                 </td>
                 <td className="px-3 py-2.5 text-center">
-                  <span className="text-sm font-bold text-slate-900">
-                    {Number(r.score).toFixed(1)}
-                  </span>
+                  <div className="flex items-center justify-center gap-2">
+                    <span className="text-sm font-bold text-slate-900">
+                      {Number(r.score).toFixed(1)}
+                    </span>
+                    {hasScoreChanged && (
+                      <div
+                        className="flex items-center gap-0.5 rounded px-1.5 py-0.5 bg-blue-100"
+                        title={`Nota atualizada de ${r.previousScore} para ${Number(r.score).toFixed(1)}`}
+                      >
+                        <RefreshCw className="h-2.5 w-2.5 text-blue-600" />
+                        <span className="text-[10px] font-medium text-blue-600">atualizado</span>
+                      </div>
+                    )}
+                  </div>
                 </td>
                 <td className="px-3 py-2.5 text-center text-slate-500">
                   {r.createdAt
@@ -502,10 +517,14 @@ export default function DashboardView({
   onClearActivity,
   onUpdateStudentResult,
   onDeleteStudentResult,
+  onRecalculateScores,
 }) {
   const [chartMode, setChartMode] = useState("bars");
   const [studentSearch, setStudentSearch] = useState("");
   const [openResult, setOpenResult] = useState(null);
+  const [rangeStart, setRangeStart] = useState("");
+  const [rangeEnd, setRangeEnd] = useState("");
+  const [recalculating, setRecalculating] = useState(false);
 
   const selectedClass = useMemo(
     () => classes.find((item) => item.id === selectedClassId) || null,
@@ -518,7 +537,47 @@ export default function DashboardView({
     [selectedClass, selectedActivityId],
   );
 
-  const scopedResults = selectedActivity?.results || [];
+  useEffect(() => {
+    if (selectedActivity) {
+      setRangeStart(1);
+      setRangeEnd(selectedActivity.questionCount);
+    }
+  }, [selectedActivity]);
+
+  const scopedResults = useMemo(() => {
+    if (!selectedActivity) return [];
+    const baseResults = selectedActivity.results || [];
+    const key = selectedActivity.officialKey || [];
+    
+    const s = Math.max(1, parseInt(rangeStart) || 1);
+    const e = Math.min(selectedActivity.questionCount, Math.max(s, parseInt(rangeEnd) || selectedActivity.questionCount));
+    
+    const startIdx = s - 1;
+    const endIdx = e;
+    const rangeTotal = endIdx - startIdx;
+
+    if (rangeTotal === selectedActivity.questionCount) {
+      return baseResults; // use original if full range
+    }
+
+    return baseResults.map((r) => {
+      let correct = 0;
+      const studentAnswers = r.studentAnswers || [];
+      if (rangeTotal > 0) {
+        for (let i = startIdx; i < endIdx; i++) {
+          if (studentAnswers[i] === key[i]) correct++;
+        }
+      }
+      const score = rangeTotal > 0 ? (correct / rangeTotal) * 10 : 0;
+      return {
+        ...r,
+        correctCount: correct,
+        score: score,
+        totalQuestions: rangeTotal,
+      };
+    });
+  }, [selectedActivity, rangeStart, rangeEnd]);
+
   const officialKey = useMemo(
     () =>
       selectedActivity
@@ -541,19 +600,27 @@ export default function DashboardView({
 
   const questionBars = useMemo(() => {
     if (!selectedActivity) return [];
-    return Array.from({ length: selectedActivity.questionCount }, (_, idx) => {
-      const hits = scopedResults.filter(
+    
+    const s = Math.max(1, parseInt(rangeStart) || 1);
+    const e = Math.min(selectedActivity.questionCount, Math.max(s, parseInt(rangeEnd) || selectedActivity.questionCount));
+    
+    const bars = [];
+    const baseResults = selectedActivity.results || [];
+    
+    for (let idx = s - 1; idx < e; idx++) {
+      const hits = baseResults.filter(
         (item) => item.studentAnswers?.[idx] === selectedActivity.officialKey?.[idx],
       ).length;
       const accuracy =
-        scopedResults.length > 0 ? Math.round((hits / scopedResults.length) * 100) : 0;
-      return {
+        baseResults.length > 0 ? Math.round((hits / baseResults.length) * 100) : 0;
+      bars.push({
         label: `Q${idx + 1}`,
         accuracy,
         officialAnswer: selectedActivity.officialKey?.[idx] || "-",
-      };
-    });
-  }, [selectedActivity, scopedResults]);
+      });
+    }
+    return bars;
+  }, [selectedActivity, rangeStart, rangeEnd]);
 
   const worstQuestions = useMemo(() => {
     if (!questionBars.length) return [];
@@ -598,11 +665,11 @@ export default function DashboardView({
   return (
     <section className="mx-auto w-full max-w-7xl px-4 pb-12 pt-6 sm:px-6">
       {/* Selectors */}
-      <div className="mb-4 grid gap-2 rounded-xl border border-slate-200 bg-white p-3 sm:grid-cols-2">
+      <div className="mb-4 grid gap-2 rounded-xl border border-slate-200 bg-white p-3 sm:grid-cols-4">
         <select
           value={selectedClassId || ""}
           onChange={(e) => onSelectClass(e.target.value)}
-          className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm"
+          className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm sm:col-span-1"
         >
           <option value="">Selecione a turma</option>
           {classes.map((item) => (
@@ -614,7 +681,7 @@ export default function DashboardView({
         <select
           value={selectedActivityId || ""}
           onChange={(e) => onSelectActivity(e.target.value)}
-          className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm"
+          className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm sm:col-span-1"
         >
           <option value="">Selecione a atividade</option>
           {(selectedClass?.activities || []).map((item) => (
@@ -623,6 +690,26 @@ export default function DashboardView({
             </option>
           ))}
         </select>
+        <div className="flex items-center gap-2 sm:col-span-2">
+          <span className="text-xs font-medium text-slate-500 whitespace-nowrap">Filtrar Questoes:</span>
+          <input
+            type="number"
+            min={1}
+            max={selectedActivity?.questionCount || 1}
+            value={rangeStart}
+            onChange={(e) => setRangeStart(e.target.value)}
+            className="w-16 rounded-lg border border-slate-300 bg-white px-2 py-1.5 text-sm"
+          />
+          <span className="text-xs text-slate-500">ate</span>
+          <input
+            type="number"
+            min={1}
+            max={selectedActivity?.questionCount || 1}
+            value={rangeEnd}
+            onChange={(e) => setRangeEnd(e.target.value)}
+            className="w-16 rounded-lg border border-slate-300 bg-white px-2 py-1.5 text-sm"
+          />
+        </div>
       </div>
 
       {/* KPI Cards */}
@@ -663,6 +750,21 @@ export default function DashboardView({
 
       {/* Action Buttons */}
       <div className="mb-4 flex flex-wrap justify-end gap-2">
+        <button
+          type="button"
+          onClick={() => {
+            if (onRecalculateScores && selectedClassId && selectedActivityId) {
+              setRecalculating(true);
+              onRecalculateScores(selectedClassId, selectedActivityId);
+              setTimeout(() => setRecalculating(false), 500);
+            }
+          }}
+          disabled={!selectedClassId || !selectedActivityId || recalculating}
+          className="no-print inline-flex items-center gap-2 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-xs font-medium text-blue-700 transition hover:bg-blue-100 disabled:opacity-50 disabled:cursor-not-allowed"
+        >
+          <RefreshCw className={`h-4 w-4 ${recalculating ? "animate-spin" : ""}`} />
+          {recalculating ? "Recalculando..." : "Recalcular Notas"}
+        </button>
         <button
           type="button"
           onClick={onExport}

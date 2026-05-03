@@ -2028,6 +2028,7 @@ export default function App() {
   const saveActivityConfig = (classId, activityId, config) => {
     setAppData((prev) => {
       const current = normalizeAppData(prev || normalizedData);
+      const recalculatedAt = new Date().toISOString();
       return {
         ...current,
         classes: current.classes.map((classroom) => {
@@ -2046,6 +2047,27 @@ export default function App() {
                 questionCount: count,
                 weight: Number(config.weight || 1) > 0 ? Number(config.weight) : 1,
                 officialKey: key,
+                results: (activity.results || []).map((r) => {
+                  let correctCount = 0;
+                  const studentAnswers = r.studentAnswers || [];
+                  for (let i = 0; i < count; i++) {
+                    if (studentAnswers[i] === key[i]) correctCount++;
+                  }
+                  const rawScore = count > 0 ? (correctCount / count) * 10 : 0;
+                  const weightedScore = rawScore * (Number(config.weight || 1) > 0 ? Number(config.weight) : 1);
+                  const hadPreviousScore = r.score !== undefined && r.score !== null;
+                  const scoreChanged = hadPreviousScore && Number(r.score) !== Number(rawScore.toFixed(1));
+                  return {
+                    ...r,
+                    correctCount,
+                    score: Number(rawScore.toFixed(1)),
+                    weightedScore: Number(weightedScore.toFixed(2)),
+                    totalQuestions: count,
+                    lastRecalculatedAt: recalculatedAt,
+                    scoreChanged: scoreChanged,
+                    previousScore: scoreChanged ? r.score : undefined,
+                  };
+                }),
               };
             }),
           };
@@ -2253,6 +2275,51 @@ export default function App() {
     });
   };
 
+  const handleRecalculateScores = (classId, activityId) => {
+    setAppData((prev) => {
+      const current = normalizeAppData(prev || normalizedData);
+      const recalculatedAt = new Date().toISOString();
+      return {
+        ...current,
+        classes: current.classes.map((classroom) => {
+          if (classroom.id !== classId) return classroom;
+          return {
+            ...classroom,
+            activities: classroom.activities.map((activity) => {
+              if (activity.id !== activityId) return activity;
+              const key = activity.officialKey || [];
+              const count = activity.questionCount || key.length;
+              return {
+                ...activity,
+                results: (activity.results || []).map((r) => {
+                  let correctCount = 0;
+                  const studentAnswers = r.studentAnswers || [];
+                  for (let i = 0; i < count; i++) {
+                    if (studentAnswers[i] === key[i]) correctCount++;
+                  }
+                  const rawScore = count > 0 ? (correctCount / count) * 10 : 0;
+                  const weightedScore = rawScore * Number(activity.weight || 1);
+                  const hadPreviousScore = r.score !== undefined && r.score !== null;
+                  const scoreChanged = hadPreviousScore && Number(r.score) !== Number(rawScore.toFixed(1));
+                  return {
+                    ...r,
+                    correctCount,
+                    score: Number(rawScore.toFixed(1)),
+                    weightedScore: Number(weightedScore.toFixed(2)),
+                    totalQuestions: count,
+                    lastRecalculatedAt: recalculatedAt,
+                    scoreChanged: scoreChanged ? true : r.scoreChanged,
+                    previousScore: scoreChanged ? r.score : r.previousScore,
+                  };
+                }),
+              };
+            }),
+          };
+        }),
+      };
+    });
+  };
+
   const handleUpdateStudentResult = (classId, activityId, resultId, editedAnswers, newCorrectCount, newScore) => {
     setAppData((prev) => {
       const current = normalizeAppData(prev || normalizedData);
@@ -2417,6 +2484,7 @@ export default function App() {
             onClearActivity={handleClearActivityResults}
             onUpdateStudentResult={handleUpdateStudentResult}
             onDeleteStudentResult={handleDeleteStudentResult}
+            onRecalculateScores={handleRecalculateScores}
           />
         </Suspense>
       );
